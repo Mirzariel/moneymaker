@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moneymaker"
+version = "0.1.0"
+description = "Personal spot-trading bot for Tokocrypto with a hard risk engine and kill switch"
+requires-python = ">=3.11"
+dependencies = [
+  "ccxt>=4.5,<5",
+  "pydantic>=2.7,<3",
+  "pydantic-settings>=2.3,<3",
+  "pyyaml>=6",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "python-telegram-bot>=21,<23",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+moneymaker = "moneymaker.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,45 @@
+# Copy to config.yaml. Every value here is a default; delete lines you don't change.
+quote: USDT              # or IDR – check `moneymaker check` output for which has more liquid markets
+timeframe: 1h            # swing timeframe: fees make anything faster very hard to profit from
+loop_interval_sec: 60
+timezone: Asia/Jakarta   # "today" for the daily-loss limit
+panic_scope: bot_positions   # or all_non_quote: panic also sells coins the bot didn't buy
+
+scanner:
+  min_quote_volume_24h: 500000   # in quote currency (for IDR use e.g. 5000000000)
+  max_spread_pct: 0.3
+  max_symbols: 15
+  refresh_minutes: 30
+  whitelist: []                   # e.g. ["BTC/USDT", "ETH/USDT"] to trade only these
+  blacklist: []
+
+strategy:
+  name: trend_atr
+  ema_fast: 20
+  ema_slow: 50
+  breakout_lookback: 20
+  atr_period: 14
+  atr_stop_mult: 2.0
+  reward_risk: 2.0
+  signal_ttl_sec: 300
+
+risk:
+  risk_per_trade_pct: 1.0      # max loss per trade if the stop fills, incl. fees
+  max_position_pct: 20.0
+  max_open_positions: 3
+  max_exposure_pct: 60.0
+  max_daily_loss_pct: 3.0      # breach -> auto-pause
+  max_consecutive_losses: 4    # -> auto-pause
+  cooldown_minutes: 60
+  max_entry_drift_pct: 1.0
+  min_edge_fee_multiple: 3.0   # target must be >= 3x round-trip fees
+  stop_limit_offset_pct: 0.5
+  quote_buffer_pct: 1.0
+
+fees:
+  taker_pct: 0.75   # CCXT's listed Tokocrypto fee. VERIFY your real tier and update!
+  maker_pct: 0.75
+
+paper:
+  starting_quote_balance: 1000
+  slippage_pct: 0.1
