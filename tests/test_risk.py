@@ -82,9 +82,9 @@ def test_stop_above_price_rejected(risk):
 
 def test_insufficient_edge_vs_fees():
     cfg = make_cfg()
-    cfg.fees.taker_pct = 0.75  # CCXT default for Tokocrypto
+    cfg.fees.buy_pct, cfg.fees.sell_pct = 0.2222, 0.4322  # Tokocrypto IDR taker, all-in
     r = RiskEngine(cfg.risk, cfg.fees, 0, 1)
-    d = r.evaluate(sig(tp=103.0), ctx())  # ~3% target < 3 x 1.5% round trip
+    d = r.evaluate(sig(tp=101.9), ctx())  # ~1.85% target < 3 x 0.65% round trip
     assert d.rule == "insufficient_edge"
 
 

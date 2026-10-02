@@ -74,12 +74,32 @@ class RiskConfig(BaseModel):
     stop_limit_offset_pct: float = 0.5
     # Keep a small quote buffer so fees never make an order fail for insufficient balance.
     quote_buffer_pct: float = 1.0
+    # Exchange minimum order in quote currency, used when the market metadata doesn't carry one
+    # (Tokocrypto IDR pairs: Rp20.000). The larger of this and the market's own minimum applies.
+    min_order_quote: float = 0.0
+    # Size at least this multiple of the minimum, so the position can still be sold after a drop + fees.
+    min_notional_headroom: float = 1.25
+    # Small accounts: if the risk-based size is below the exchange minimum, bump it up to the minimum
+    # as long as the trade then risks at most `max_risk_pct_on_bump` of equity. Otherwise reject.
+    allow_min_size_bump: bool = False
+    max_risk_pct_on_bump: float = 3.0
+    # If a market can't hold a STOP_LOSS_LIMIT order on the exchange, allow trading it with a stop that
+    # the bot enforces itself. That stop only works while the bot is running.
+    allow_bot_side_stop: bool = False
 
 
 class FeeConfig(BaseModel):
-    # CCXT lists 0.75% for Tokocrypto. Verify your real fee with `moneymaker check` and update.
-    taker_pct: float = 0.75
-    maker_pct: float = 0.75
+    """All-in cost per side in %, including tax and exchange levies. The bot uses market (taker) orders.
+
+    Defaults: Tokocrypto IDR pairs, taker, from 18 Jun 2026 (fee 0.20% + ICEx 0.0222%, plus PPh 0.21% on
+    sells under PMK 50/2025). Check the fee page in your account and update if your tier differs.
+    """
+    buy_pct: float = 0.2222
+    sell_pct: float = 0.4322
+
+    @property
+    def round_trip_pct(self) -> float:
+        return self.buy_pct + self.sell_pct
 
 
 class PaperConfig(BaseModel):
@@ -88,7 +108,7 @@ class PaperConfig(BaseModel):
 
 
 class BotConfig(BaseModel):
-    quote: str = "USDT"
+    quote: str = "IDR"
     timeframe: str = "1h"
     loop_interval_sec: int = 60
     timezone: str = "Asia/Jakarta"
@@ -107,6 +127,8 @@ class BotConfig(BaseModel):
             raise ValueError("risk.risk_per_trade_pct must be in (0, 5]")
         if self.risk.max_position_pct > self.risk.max_exposure_pct:
             raise ValueError("risk.max_position_pct cannot exceed risk.max_exposure_pct")
+        if self.risk.max_risk_pct_on_bump > 10:
+            raise ValueError("risk.max_risk_pct_on_bump above 10% per trade is not allowed")
         return self
 
 

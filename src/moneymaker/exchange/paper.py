@@ -17,10 +17,11 @@ from .base import ExchangeClient, MarketData
 class PaperExchange(ExchangeClient):
     is_paper = True
 
-    def __init__(self, data: MarketData, quote: str, starting_quote: float, fee_pct: float, slippage_pct: float,
-                 state_path: str | Path | None = None):
+    def __init__(self, data: MarketData, quote: str, starting_quote: float, buy_fee_pct: float,
+                 sell_fee_pct: float, slippage_pct: float, state_path: str | Path | None = None):
         self.data = data
-        self.fee = fee_pct / 100
+        self.buy_fee = buy_fee_pct / 100
+        self.sell_fee = sell_fee_pct / 100
         self.slip = slippage_pct / 100
         self.state_path = Path(state_path) if state_path else None
         self.balances: dict[str, float] = {quote: starting_quote}
@@ -49,8 +50,8 @@ class PaperExchange(ExchangeClient):
         self._markets = await self.data.load_markets()
         return self._markets
 
-    async def fetch_tickers(self) -> dict[str, Ticker]:
-        return await self.data.fetch_tickers()
+    async def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Ticker]:
+        return await self.data.fetch_tickers(symbols)
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         return await self.data.fetch_ticker(symbol)
@@ -97,7 +98,7 @@ class PaperExchange(ExchangeClient):
             fill_price = max(fill_price, o.price or 0)
             base, quote = self._split(o.symbol)
             gross = o.amount * fill_price
-            fee = gross * self.fee
+            fee = gross * self.sell_fee
             self._add(base, -o.amount)
             self._add(quote, gross - fee)
             o.status, o.filled, o.average, o.cost = "closed", o.amount, fill_price, gross
@@ -120,7 +121,7 @@ class PaperExchange(ExchangeClient):
         t = await self.data.fetch_ticker(symbol)
         price = t.ask * (1 + self.slip)
         gross_amount = cost / price
-        fee = gross_amount * self.fee  # Binance-style: buy fee charged in base asset
+        fee = gross_amount * self.buy_fee  # Binance-style: buy fee charged in base asset
         amount = self.amount_to_precision(symbol, gross_amount - fee)
         self._add(quote, -cost)
         self._add(base, amount)
@@ -139,7 +140,7 @@ class PaperExchange(ExchangeClient):
         t = await self.data.fetch_ticker(symbol)
         price = t.bid * (1 - self.slip)
         gross = amount * price
-        fee = gross * self.fee
+        fee = gross * self.sell_fee
         self._add(base, -amount)
         self._add(quote, gross - fee)
         o = Order(id=uuid.uuid4().hex[:12], client_id=client_id, symbol=symbol, side="sell", type="market",
@@ -194,8 +195,8 @@ class StaticMarketData(MarketData):
     async def load_markets(self) -> dict[str, Market]:
         return self.markets
 
-    async def fetch_tickers(self) -> dict[str, Ticker]:
-        return dict(self.tickers)
+    async def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Ticker]:
+        return {k: v for k, v in self.tickers.items() if symbols is None or k in symbols}
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         return self.tickers[symbol]

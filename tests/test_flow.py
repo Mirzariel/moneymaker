@@ -117,7 +117,7 @@ async def test_crash_recovery_stop_filled_while_offline(engine, paper, market_da
     # Process dies. While offline the stop fills on the exchange.
     market_data.set_price(SYM, pos.stop_price * 0.999, spread_pct=0.01)
     await paper.fetch_balance()  # exchange-side matching happens regardless of the bot
-    paper2 = PaperExchange(market_data, "USDT", 1000.0, cfg.fees.taker_pct, 0.0, state_path=tmp_path / "paper.json")
+    paper2 = PaperExchange(market_data, "USDT", 1000.0, cfg.fees.buy_pct, cfg.fees.sell_pct, 0.0, state_path=tmp_path / "paper.json")
     eng2 = Engine(paper2, Store(tmp_path / "bot.db"), Notifier(), cfg)
     findings = await reconcile(eng2)
     assert eng2.store.open_positions() == []

@@ -1,16 +1,19 @@
-# Copy to config.yaml. Every value here is a default; delete lines you don't change.
-quote: USDT              # or IDR – check `moneymaker check` output for which has more liquid markets
-timeframe: 1h            # swing timeframe: fees make anything faster very hard to profit from
+# Preset: modal kecil (±Rp100.000), langsung live di Tokocrypto, pair IDR.
+# Copy ke config.yaml. Jalankan `moneymaker check` dulu: bagian "Order size preview" menunjukkan
+# berapa rupiah yang akan dibeli bot per trade dengan saldo kamu yang sebenarnya.
+
+quote: IDR               # tanpa konversi ke USDT (konversi juga kena fee + pajak)
+timeframe: 1h            # swing: fee membuat timeframe lebih cepat hampir mustahil profit
 loop_interval_sec: 60
-timezone: Asia/Jakarta   # "today" for the daily-loss limit
-panic_scope: bot_positions   # or all_non_quote: panic also sells coins the bot didn't buy
+timezone: Asia/Jakarta   # "hari ini" untuk batas rugi harian
+panic_scope: bot_positions   # all_non_quote = panic juga menjual koin yang tidak dibeli bot
 
 scanner:
-  min_quote_volume_24h: 500000   # in quote currency (for IDR use e.g. 5000000000)
-  max_spread_pct: 0.3
-  max_symbols: 15
+  min_quote_volume_24h: 500000000   # Rp500 juta/hari. Turunkan kalau `check` bilang tidak ada yang tradeable
+  max_spread_pct: 0.5
+  max_symbols: 10
   refresh_minutes: 30
-  whitelist: []                   # e.g. ["BTC/USDT", "ETH/USDT"] to trade only these
+  whitelist: []                      # mis. ["BTC/IDR", "ETH/IDR"] untuk membatasi pair
   blacklist: []
 
 strategy:
@@ -24,22 +27,30 @@ strategy:
   signal_ttl_sec: 300
 
 risk:
-  risk_per_trade_pct: 1.0      # max loss per trade if the stop fills, incl. fees
-  max_position_pct: 20.0
-  max_open_positions: 3
-  max_exposure_pct: 60.0
-  max_daily_loss_pct: 3.0      # breach -> auto-pause
-  max_consecutive_losses: 4    # -> auto-pause
+  risk_per_trade_pct: 2.0        # rugi maks ±Rp2.000 per trade kalau stop kena (termasuk fee)
+  max_position_pct: 50.0         # maks ±Rp50.000 per posisi
+  max_open_positions: 2
+  max_exposure_pct: 90.0
+  max_daily_loss_pct: 6.0        # rugi ±Rp6.000 dalam sehari -> auto-pause
+  max_consecutive_losses: 4      # kalah 4x berturut-turut -> auto-pause
   cooldown_minutes: 60
   max_entry_drift_pct: 1.0
-  min_edge_fee_multiple: 3.0   # target must be >= 3x round-trip fees
+  min_edge_fee_multiple: 3.0     # target harus >= 3x fee pulang-pergi (±0,65% -> target >= ±2%)
   stop_limit_offset_pct: 0.5
-  quote_buffer_pct: 1.0
+  quote_buffer_pct: 2.0
+  # --- penyesuaian modal kecil ---
+  min_order_quote: 20000         # minimal order pair IDR di Tokocrypto
+  min_notional_headroom: 1.25    # order minimal efektif Rp25.000 supaya tetap bisa dijual setelah turun
+  allow_min_size_bump: true      # kalau ukuran hitungan risiko < minimal order, naikkan ke minimal...
+  max_risk_pct_on_bump: 3.0      # ...asal risikonya tetap <= 3% modal. Kalau lebih, trade ditolak.
+  # Kalau pair IDR tidak menerima STOP_LOSS_LIMIT di exchange, bot menjaga stop sendiri.
+  # Stop seperti itu HANYA aktif selama bot menyala (laptop jangan sleep).
+  allow_bot_side_stop: true
 
-fees:
-  taker_pct: 0.75   # CCXT's listed Tokocrypto fee. VERIFY your real tier and update!
-  maker_pct: 0.75
+fees:                # biaya all-in per sisi (taker), Tokocrypto pair IDR sejak 18 Jun 2026
+  buy_pct: 0.2222    # fee 0,20% + ICEx 0,0222%
+  sell_pct: 0.4322   # fee 0,20% + PPh 0,21% + ICEx 0,0222%
 
-paper:
-  starting_quote_balance: 1000
+paper:               # hanya dipakai kalau LIVE_TRADING=false
+  starting_quote_balance: 100000
   slippage_pct: 0.1

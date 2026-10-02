@@ -67,13 +67,15 @@ class Result:
                 f"buy&hold {self.buy_hold_pct:+7.2f}%")
 
 
-def backtest(symbol: str, candles: list[Candle], cfg: BotConfig, start_equity: float = 1000.0) -> Result:
+def backtest(symbol: str, candles: list[Candle], cfg: BotConfig, start_equity: float = 1000.0,
+             market: Market | None = None) -> Result:
     strategy = build_strategy(cfg.strategy)
     risk = RiskEngine(cfg.risk, cfg.fees, min_quote_volume_24h=0, max_spread_pct=100)
-    fee = cfg.fees.taker_pct / 100
+    buy_fee = cfg.fees.buy_pct / 100
+    sell_fee = cfg.fees.sell_pct / 100
     slip = cfg.paper.slippage_pct / 100
     offset = cfg.risk.stop_limit_offset_pct / 100
-    market = Market(symbol, *symbol.split("/"))
+    market = market or Market(symbol, *symbol.split("/"), supports_stop_limit=True)
 
     cash = start_equity
     pos: dict | None = None
@@ -85,7 +87,7 @@ def backtest(symbol: str, candles: list[Candle], cfg: BotConfig, start_equity: f
     def close(i: int, price: float, reason: str) -> None:
         nonlocal cash, pos, last_trade_ts
         gross = pos["qty"] * price
-        f = gross * fee
+        f = gross * sell_fee
         res.fees_paid += f
         cash += gross - f
         res.trades.append(Trade(pos["ts"], candles[i].ts, pos["entry"], price, pos["cost"], gross - f, reason))
@@ -103,7 +105,7 @@ def backtest(symbol: str, candles: list[Candle], cfg: BotConfig, start_equity: f
                               market=market, last_entry_ts=last_trade_ts)
             d = risk.evaluate(pending, ctx)
             if d.approved:
-                f = d.cost * fee
+                f = d.cost * buy_fee
                 res.fees_paid += f
                 cash -= d.cost
                 pos = {"qty": (d.cost - f) / price, "entry": price, "cost": d.cost, "stop": pending.stop,
@@ -166,15 +168,17 @@ async def fetch_history(ex: TokocryptoClient, symbol: str, timeframe: str, days:
 
 
 async def run_backtest_cli(cfg: BotConfig, symbols: list[str], days: int) -> None:
-    ex = TokocryptoClient()
+    ex = TokocryptoClient(native_quotes=(cfg.quote,))
     try:
-        print(f"Backtest {days}d {cfg.timeframe}, fee {cfg.fees.taker_pct}%/side, slippage {cfg.paper.slippage_pct}%")
+        markets = await ex.load_markets()
+        print(f"Backtest {days}d {cfg.timeframe}, fees buy {cfg.fees.buy_pct}% / sell {cfg.fees.sell_pct}%, "
+              f"slippage {cfg.paper.slippage_pct}%")
         for s in symbols:
             candles = await fetch_history(ex, s, cfg.timeframe, days)
             if len(candles) < 200:
                 print(f"{s}: not enough data ({len(candles)} candles)")
                 continue
-            r = backtest(s, candles, cfg, cfg.paper.starting_quote_balance)
+            r = backtest(s, candles, cfg, cfg.paper.starting_quote_balance, markets.get(s))
             print(r.summary())
             if r.rejected:
                 print(f"{'':<12} rejected signals: {r.rejected}")

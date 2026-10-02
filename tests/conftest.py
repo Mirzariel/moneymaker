@@ -17,8 +17,9 @@ SYM = "BTC/USDT"
 
 def make_cfg(**risk) -> BotConfig:
     cfg = BotConfig()
-    cfg.fees.taker_pct = 0.1
-    cfg.fees.maker_pct = 0.1
+    cfg.quote = "USDT"
+    cfg.fees.buy_pct = 0.1
+    cfg.fees.sell_pct = 0.1
     cfg.paper.slippage_pct = 0.0
     cfg.scanner.min_quote_volume_24h = 1_000
     for k, v in risk.items():
@@ -65,7 +66,7 @@ def cfg():
 
 @pytest.fixture
 def paper(market_data, cfg, tmp_path):
-    return PaperExchange(market_data, "USDT", 1000.0, cfg.fees.taker_pct, cfg.paper.slippage_pct,
+    return PaperExchange(market_data, "USDT", 1000.0, cfg.fees.buy_pct, cfg.fees.sell_pct, cfg.paper.slippage_pct,
                          state_path=tmp_path / "paper.json")
 
 

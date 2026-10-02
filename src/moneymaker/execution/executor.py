@@ -87,6 +87,13 @@ class Executor:
         self.store.update_order(cid, position_id=pos_id)
         self.store.audit("engine", "entry", f"{sig.symbol} pos={pos_id} amount={amount} avg={avg:.8g} cost={cost:.2f}")
 
+        if not self.exchange_stop_supported(sig.symbol):
+            await self.notify.send(
+                f"🟢 BUY {sig.symbol} {amount:.8g} @ {avg:.8g} (cost {cost:.2f} {quote})\n"
+                f"stop {sig.stop:.8g} (dijaga BOT — hanya aktif selama bot menyala) · target {sig.take_profit:.8g}\n"
+                f"{sig.reason}"
+            )
+            return pos_id
         stop_id = await self.place_stop(pos_id, sig.symbol, amount, sig.stop)
         if stop_id is None:
             pos = self._position(pos_id)
@@ -99,6 +106,10 @@ class Executor:
             f"stop {sig.stop:.8g} · target {sig.take_profit:.8g}\n{sig.reason}"
         )
         return pos_id
+
+    def exchange_stop_supported(self, symbol: str) -> bool:
+        m = self.markets.get(symbol)
+        return m is None or m.supports_stop_limit
 
     def _position(self, pos_id: int) -> Position | None:
         return next((p for p in self.store.open_positions() if p.id == pos_id), None)
@@ -215,6 +226,12 @@ class Executor:
             await self.notify.send(f"⚠️ {pos.symbol}: holdings gone without a bot order (sold manually?). "
                                    f"Marked closed, est. PnL {pnl:+.2f}")
             return False
+        if not self.exchange_stop_supported(pos.symbol):
+            # Bot-side stop: the bot itself sells when price reaches the stop.
+            if ticker.bid <= pos.stop_price:
+                await self.close_position(pos, "stop_loss_bot")
+                return False
+            return True
         if ticker.bid <= pos.stop_price:
             await self.close_position(pos, "stop_breached_unprotected")
             return False

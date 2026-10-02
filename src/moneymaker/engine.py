@@ -59,6 +59,8 @@ class Engine:
                 continue
             if m.base.endswith(("UP", "DOWN", "BULL", "BEAR")):
                 continue  # leveraged tokens
+            if not m.supports_stop_limit and not self.cfg.risk.allow_bot_side_stop:
+                continue  # no exchange-side stop possible
             t = tickers.get(sym)
             if not t or t.quote_volume < sc.min_quote_volume_24h or t.spread_pct > sc.max_spread_pct:
                 continue
@@ -109,7 +111,13 @@ class Engine:
             self.last_error = None
             if not self.markets:
                 await self.refresh_markets()
-            tickers = await self.ex.fetch_tickers()
+            running = self.store.status == BotStatus.RUNNING
+            if running and (not self.universe
+                            or time.time() - self._universe_at > self.cfg.scanner.refresh_minutes * 60):
+                wl = self.cfg.scanner.whitelist
+                await self.refresh_universe(await self.ex.fetch_tickers(list(wl) if wl else None))
+            needed = set(self.universe) | {p.symbol for p in self.store.open_positions()}
+            tickers = await self.ex.fetch_tickers(sorted(needed)) if needed else {}
             self.last_prices = {s: t.last for s, t in tickers.items()}
 
             # 1. Protect / exit open positions (runs even when PAUSED).
@@ -130,8 +138,6 @@ class Engine:
                 return
 
             # 3. Scan for new entries.
-            if time.time() - self._universe_at > self.cfg.scanner.refresh_minutes * 60 or not self.universe:
-                await self.refresh_universe(tickers)
             await self.scan_entries(tickers, ctx)
 
     async def manage_positions(self, tickers: dict[str, Ticker]) -> None:

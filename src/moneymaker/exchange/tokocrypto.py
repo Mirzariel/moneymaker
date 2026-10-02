@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Awaitable, Callable, TypeVar
 
 import ccxt.async_support as ccxt
@@ -49,10 +50,13 @@ def parse_order(o: dict, fallback_client_id: str = "") -> Order:
 class TokocryptoClient(ExchangeClient):
     """Thin wrapper: retries read-only calls; never retries order placement (reconcile handles that)."""
 
-    def __init__(self, api_key: str = "", secret: str = "", read_retries: int = 3):
+    def __init__(self, api_key: str = "", secret: str = "", read_retries: int = 3,
+                 native_quotes: tuple[str, ...] = ("IDR",)):
         self.ex = ccxt.tokocrypto({"apiKey": api_key, "secret": secret, "enableRateLimit": True})
         self.read_retries = read_retries
+        self.native_quotes = native_quotes
         self._markets: dict[str, Market] = {}
+        self._volume_cache: dict[str, tuple[float, float]] = {}  # symbol -> (fetched_at, 24h quote volume)
 
     async def _read(self, fn: Callable[[], Awaitable[T]]) -> T:
         delay = 1.0
@@ -87,20 +91,66 @@ class TokocryptoClient(ExchangeClient):
                 min_cost=_f((limits.get("cost") or {}).get("min")),
                 active=bool(m.get("active", True)),
                 supports_stop_limit="STOP_LOSS_LIMIT" in order_types if order_types else False,
+                native=bool(self.ex.is_native_market(m)),
             )
         self._markets = out
         return out
 
-    async def fetch_tickers(self) -> dict[str, Ticker]:
-        # Only Binance-backed (type 1) markets have 24h stats; native ones are omitted by CCXT.
-        raw = await self._read(lambda: self.ex.fetch_tickers())
-        out = {}
-        for sym, t in raw.items():
-            out[sym] = Ticker(symbol=sym, bid=_f(t.get("bid")), ask=_f(t.get("ask")), last=_f(t.get("last")),
-                              quote_volume=_f(t.get("quoteVolume")))
+    async def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Ticker]:
+        if not self._markets:
+            await self.load_markets()
+        out: dict[str, Ticker] = {}
+        binance_error: Exception | None = None
+        want = None if symbols is None else set(symbols)
+        if want is None or any(s in self._markets and not self._markets[s].native for s in want):
+            # Binance-backed (type 1) markets: one call to api.binance.com returns all of them.
+            # That host may be blocked by Indonesian ISPs, so a failure here must not hide native markets.
+            try:
+                raw = await self._read(lambda: self.ex.fetch_tickers())
+            except Exception as e:  # noqa: BLE001
+                log.warning("binance-backed tickers unavailable: %s", e)
+                binance_error = e
+                raw = {}
+            for sym, t in raw.items():
+                if want is None or sym in want:
+                    out[sym] = Ticker(symbol=sym, bid=_f(t.get("bid")), ask=_f(t.get("ask")), last=_f(t.get("last")),
+                                      quote_volume=_f(t.get("quoteVolume")))
+        # Native markets (e.g. IDR pairs) have no ticker endpoint: build one per market.
+        native = [s for s, m in self._markets.items() if m.native and m.active
+                  and (s in want if want is not None else m.quote in self.native_quotes)]
+        sem = asyncio.Semaphore(4)
+
+        async def one(sym: str) -> None:
+            async with sem:
+                try:
+                    out[sym] = await self._native_ticker(sym)
+                except Exception as e:  # noqa: BLE001 - one bad market must not hide the rest
+                    log.warning("native ticker %s failed: %s", sym, e)
+
+        await asyncio.gather(*(one(s) for s in native))
+        if not out and binance_error is not None:
+            raise binance_error
         return out
 
+    async def _native_ticker(self, symbol: str) -> Ticker:
+        ob = await self._read(lambda: self.ex.fetch_order_book(symbol, 5))
+        bid = _f(ob["bids"][0][0]) if ob.get("bids") else 0.0
+        ask = _f(ob["asks"][0][0]) if ob.get("asks") else 0.0
+        cached = self._volume_cache.get(symbol)
+        if cached is None or time.time() - cached[0] > 900:
+            candles = await self.fetch_ohlcv(symbol, "1h", 25)
+            volume = sum(c.volume * c.close for c in candles[-24:])
+            self._volume_cache[symbol] = (time.time(), volume)
+        volume = self._volume_cache[symbol][1]
+        last = (bid + ask) / 2 if bid > 0 and ask > 0 else (bid or ask)
+        return Ticker(symbol=symbol, bid=bid, ask=ask, last=last, quote_volume=volume)
+
     async def fetch_ticker(self, symbol: str) -> Ticker:
+        if not self._markets:
+            await self.load_markets()
+        m = self._markets.get(symbol)
+        if m is not None and m.native:
+            return await self._native_ticker(symbol)
         t = await self._read(lambda: self.ex.fetch_ticker(symbol))
         return Ticker(symbol=symbol, bid=_f(t.get("bid")), ask=_f(t.get("ask")), last=_f(t.get("last")),
                       quote_volume=_f(t.get("quoteVolume")))

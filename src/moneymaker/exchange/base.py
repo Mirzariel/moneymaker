@@ -14,7 +14,8 @@ class MarketData(ABC):
     async def load_markets(self) -> dict[str, Market]: ...
 
     @abstractmethod
-    async def fetch_tickers(self) -> dict[str, Ticker]: ...
+    async def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Ticker]:
+        """Tickers for `symbols`, or for every market when None (may be slow)."""
 
     @abstractmethod
     async def fetch_ticker(self, symbol: str) -> Ticker: ...

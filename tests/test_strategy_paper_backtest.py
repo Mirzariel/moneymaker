@@ -58,7 +58,7 @@ async def test_paper_fees_and_locking(paper):
 async def test_paper_state_survives_restart(paper, market_data, tmp_path):
     from moneymaker.exchange.paper import PaperExchange
     await paper.market_buy(SYM, 50.0, "c1")
-    p2 = PaperExchange(market_data, "USDT", 1000.0, 0.1, 0.0, state_path=tmp_path / "paper.json")
+    p2 = PaperExchange(market_data, "USDT", 1000.0, 0.1, 0.1, 0.0, state_path=tmp_path / "paper.json")
     assert (await p2.fetch_balance()).total_of("USDT") == pytest.approx(950.0)
 
 
@@ -87,7 +87,7 @@ def test_backtest_runs_net_of_fees():
 
 def test_backtest_higher_fees_never_help():
     cheap, pricey = make_cfg(), make_cfg()
-    pricey.fees.taker_pct = 0.75
+    pricey.fees.buy_pct = pricey.fees.sell_pct = 0.75
     pricey.risk.min_edge_fee_multiple = 0  # same trades, only fees differ
     cheap.risk.min_edge_fee_multiple = 0
     a, b = backtest(SYM, _series(), cheap), backtest(SYM, _series(), pricey)

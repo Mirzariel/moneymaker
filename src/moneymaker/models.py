@@ -19,6 +19,8 @@ class Market:
     min_cost: float = 0.0
     active: bool = True
     supports_stop_limit: bool = True
+    # Tokocrypto "native" market (possibly the IDR pairs; `moneymaker check` shows): no 24h ticker API, data comes from order book + klines.
+    native: bool = False
 
 
 @dataclass(frozen=True)

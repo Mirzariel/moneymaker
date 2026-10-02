@@ -39,7 +39,7 @@ class Decision:
 class RiskEngine:
     def __init__(self, cfg: RiskConfig, fees: FeeConfig, min_quote_volume_24h: float, max_spread_pct: float):
         self.cfg = cfg
-        self.fee = fees.taker_pct / 100
+        self.round_trip_fee = fees.round_trip_pct / 100
         self.min_volume = min_quote_volume_24h
         self.max_spread = max_spread_pct
 
@@ -81,8 +81,9 @@ class RiskEngine:
         m, t = ctx.market, ctx.ticker
         if m is None or not m.active:
             return Decision.reject("market_inactive", sig.symbol)
-        if not m.supports_stop_limit:
-            return Decision.reject("no_stop_limit", "market does not accept STOP_LOSS_LIMIT orders")
+        if not m.supports_stop_limit and not c.allow_bot_side_stop:
+            return Decision.reject("no_stop_limit", "market does not accept STOP_LOSS_LIMIT orders "
+                                                    "(set risk.allow_bot_side_stop to trade it anyway)")
         if t is None or t.ask <= 0 or t.bid <= 0:
             return Decision.reject("no_quote", "missing bid/ask")
         if t.spread_pct > self.max_spread:
@@ -95,7 +96,7 @@ class RiskEngine:
             return Decision.reject("entry_drift", f"ask {price:.6g} ran >{c.max_entry_drift_pct}% above {sig.entry:.6g}")
         if sig.stop >= price:
             return Decision.reject("stop_above_price", f"stop {sig.stop:.6g} >= ask {price:.6g}")
-        round_trip_fee = 2 * self.fee
+        round_trip_fee = self.round_trip_fee
         expected_move = (sig.take_profit - price) / price
         if expected_move < c.min_edge_fee_multiple * round_trip_fee:
             return Decision.reject("insufficient_edge",
@@ -115,9 +116,21 @@ class RiskEngine:
             if cost > cap:
                 notes.append(f"resized by {name}: {cost:.2f} -> {max(cap, 0):.2f}")
                 cost = cap
-        # Headroom so the post-fee amount still clears the exchange minimum for the stop order.
-        min_cost = max(m.min_cost, m.min_amount * price) * 1.1
+        # Headroom so the post-fee amount still clears the exchange minimum after a drop to the stop.
+        min_cost = max(m.min_cost, m.min_amount * price, c.min_order_quote) * c.min_notional_headroom
+        if cost < min_cost and c.allow_min_size_bump:
+            bumped_risk_pct = min_cost * loss_frac / ctx.equity * 100 if ctx.equity > 0 else float("inf")
+            room = min(caps["max_exposure_pct"], caps["quote_free"])
+            if bumped_risk_pct <= c.max_risk_pct_on_bump and min_cost <= room:
+                notes.append(f"bumped to exchange minimum: {cost:.2f} -> {min_cost:.2f} "
+                             f"(risk {bumped_risk_pct:.2f}% of equity)")
+                cost = min_cost
+            else:
+                why = (f"risk {bumped_risk_pct:.2f}% > {c.max_risk_pct_on_bump}%"
+                       if bumped_risk_pct > c.max_risk_pct_on_bump else f"only {max(room, 0):.2f} available")
+                return Decision.reject("below_min_notional", f"min order {min_cost:.2f} not allowed: {why}")
         if cost <= 0 or cost < min_cost:
             return Decision.reject("below_min_notional", f"size {max(cost, 0):.2f} < min {min_cost:.2f}")
-        return Decision(True, "approved", f"cost {cost:.2f}, risk/unit {loss_frac * 100:.2f}%", cost=cost,
-                        notes=notes)
+        return Decision(True, "approved", f"cost {cost:.2f}, risk {cost * loss_frac:.2f} "
+                                          f"({cost * loss_frac / ctx.equity * 100:.2f}% of equity)",
+                        cost=cost, notes=notes)
