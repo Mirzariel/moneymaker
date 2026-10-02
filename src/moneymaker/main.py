@@ -24,10 +24,7 @@ from .config import BotConfig, Secrets, load_config
 from .control import ControlService
 from .db import Store
 from .engine import Engine
-from .exchange.base import ExchangeClient
-from .exchange.paper import PaperExchange
-from .exchange.tokocrypto import TokocryptoClient
-from .heartbeat import heartbeat_loop
+from .envfile import bootstrap
 from .notify.base import Notifier
 
 log = logging.getLogger("moneymaker")
@@ -37,34 +34,25 @@ def setup_logging(db_path: str) -> None:
     log_path = Path(db_path).parent / "moneymaker.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for stream in (sys.stdout, sys.stderr):  # Windows consoles can't print emoji in cp1252
+        with contextlib.suppress(Exception):
+            stream.reconfigure(errors="replace")
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout),
-                                       RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5)]
+                                       RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=5,
+                                                           encoding="utf-8")]
     for h in handlers:
         h.setFormatter(fmt)
     logging.basicConfig(level=logging.INFO, handlers=handlers, force=True)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
-def build_exchange(secrets: Secrets, cfg: BotConfig) -> ExchangeClient:
-    if secrets.live_trading:
-        if not (secrets.toko_api_key and secrets.toko_api_secret):
-            raise SystemExit("LIVE_TRADING=true but TOKO_API_KEY / TOKO_API_SECRET are missing")
-        return TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,))
-    return PaperExchange(TokocryptoClient(native_quotes=(cfg.quote,)), quote=cfg.quote,
-                         starting_quote=cfg.paper.starting_quote_balance, buy_fee_pct=cfg.fees.buy_pct,
-                         sell_fee_pct=cfg.fees.sell_pct, slippage_pct=cfg.paper.slippage_pct,
-                         state_path=secrets.paper_state_path)
-
-
-def guard_mode(store: Store, live: bool) -> None:
-    """Refuse to mix paper and live history in one database."""
-    mode = "live" if live else "paper"
-    stored = store.get("mode")
-    if stored is None:
-        store.set("mode", mode)
-    elif stored != mode:
-        raise SystemExit(f"Database {mode!r} mismatch: it holds {stored!r} history. "
-                         f"Use a separate DB_PATH for {mode} trading.")
+def keep_awake() -> None:
+    """Windows: stop the system from sleeping while this process runs (macOS/Linux: start.sh does it)."""
+    if sys.platform == "win32":
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        with contextlib.suppress(Exception):
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
 
 
 def make_api_server(config):
@@ -79,71 +67,55 @@ def make_api_server(config):
     return _Server(config)
 
 
-async def run_bot(secrets: Secrets, cfg: BotConfig) -> None:
-    store = Store(secrets.db_path)
-    guard_mode(store, secrets.live_trading)
-    ex = build_exchange(secrets, cfg)
-    notifier = Notifier()
-    engine = Engine(ex, store, notifier, cfg)
-    control = ControlService(engine)
+async def run_app(open_browser: bool = False) -> None:
+    """Web UI + bot supervisor. Works on a fresh clone: without API keys it serves the setup page."""
+    import uvicorn
 
-    tasks: list[asyncio.Task] = []
-    tg = None
-    server = None
-    if secrets.telegram_bot_token and secrets.telegram_chat_id:
-        from .notify.telegram import TelegramBot
-        tg = TelegramBot(secrets.telegram_bot_token, secrets.telegram_chat_id, control)
-        await tg.start()
-        notifier.add(tg.send)
-    else:
-        log.warning("Telegram not configured: no phone notifications or remote panic")
+    from .api.app import create_app
+    from .runtime import Runtime
 
-    mode = "LIVE (real money)" if secrets.live_trading else "PAPER"
-    await notifier.send(f"🤖 moneymaker started in {mode} mode · status {store.status.value}")
-    if secrets.live_trading and store.status.value == "RUNNING":
-        log.warning("LIVE mode resumed in RUNNING state from previous session")
-
-    if secrets.api_token:
-        import uvicorn
-
-        from .api.app import create_app
-        app = create_app(control, secrets.api_token)
-        server = make_api_server(uvicorn.Config(app, host=secrets.api_host, port=secrets.api_port, log_level="warning"))
-        tasks.append(asyncio.create_task(server.serve(), name="api"))
-    else:
-        log.warning("API_TOKEN not set: dashboard API disabled")
-    if secrets.healthcheck_url:
-        tasks.append(asyncio.create_task(heartbeat_loop(secrets.healthcheck_url, engine), name="heartbeat"))
-    else:
-        log.warning("HEALTHCHECK_URL not set: nobody will notice if this process dies")
-    tasks.append(asyncio.create_task(engine.run(), name="engine"))
-
+    runtime = Runtime()
+    s = runtime.secrets
+    app = create_app(runtime)
+    server = make_api_server(uvicorn.Config(app, host=s.api_host, port=s.api_port, log_level="warning"))
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        with contextlib.suppress(NotImplementedError):  # Windows
+        with contextlib.suppress(NotImplementedError):  # Windows: Ctrl+C raises KeyboardInterrupt instead
             loop.add_signal_handler(sig, stop.set)
+
+    server_task = asyncio.create_task(server.serve(), name="api")
+    supervisor = asyncio.create_task(runtime.supervise(stop), name="supervisor")
+    for _ in range(100):
+        if server.started or server_task.done():
+            break
+        await asyncio.sleep(0.1)
+    if server_task.done():
+        stop.set()
+        await supervisor
+        raise SystemExit(f"Web server failed to start on port {s.api_port} (already running?).")
+
+    host = "127.0.0.1" if s.api_host in ("0.0.0.0", "") else s.api_host
+    url = f"http://{host}:{s.api_port}/login?token={s.api_token}"
+    print("\n" + "=" * 70)
+    print("  moneymaker berjalan. Buka dashboard di browser lewat link ini:")
+    print(f"  {url}")
+    print("  (link ini berisi kode akses – jangan dibagikan)")
+    print("  Tutup jendela ini / tekan Ctrl+C untuk berhenti.")
+    print("=" * 70 + "\n")
+    keep_awake()
+    if open_browser:
+        import webbrowser
+        with contextlib.suppress(Exception):
+            webbrowser.open(url)
     try:
         await stop.wait()
     finally:
         log.info("shutting down (positions keep their exchange-side stops)")
-        engine.stop()
-        if server:
-            server.should_exit = True
-        for t in tasks:
-            if t.get_name() == "heartbeat":
-                t.cancel()
-        # Let an in-flight cycle finish (orders are write-ahead logged, so a hard stop is still recoverable).
-        pending = [t for t in tasks if not t.done()]
-        if pending:
-            await asyncio.wait(pending, timeout=15)
-        for t in tasks:
-            t.cancel()
-        await notifier.send("⏹️ moneymaker stopped. Open positions remain protected by exchange stop-loss.")
-        if tg:
-            await tg.stop()
-        await ex.close()
-        store.close()
+        stop.set()
+        await supervisor
+        server.should_exit = True
+        await asyncio.wait([server_task], timeout=10)
 
 
 async def api_call(secrets: Secrets, method: str, path: str, body: dict | None = None) -> dict | None:
@@ -162,7 +134,8 @@ async def api_call(secrets: Secrets, method: str, path: str, body: dict | None =
 
 async def offline_control(secrets: Secrets, cfg: BotConfig, action: str) -> dict:
     """Used when the bot process isn't running: act directly on the DB/exchange."""
-    store = Store(secrets.db_path)
+    from .runtime import build_exchange
+    store = Store(secrets.database_path)
     ex = build_exchange(secrets, cfg)
     engine = Engine(ex, store, Notifier(), cfg)
     control = ControlService(engine)
@@ -182,7 +155,8 @@ async def offline_control(secrets: Secrets, cfg: BotConfig, action: str) -> dict
 def cli() -> None:
     p = argparse.ArgumentParser(prog="moneymaker")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run")
+    rp = sub.add_parser("run")
+    rp.add_argument("--open", action="store_true", help="open the dashboard in the browser")
     sub.add_parser("status")
     sub.add_parser("pause")
     sub.add_parser("resume")
@@ -194,12 +168,19 @@ def cli() -> None:
     bt.add_argument("--days", type=int, default=180)
     args = p.parse_args()
 
+    if args.cmd == "run":
+        created = bootstrap(Path.cwd())
+        if created:
+            print(f"first run: created {', '.join(created)}")
     secrets = Secrets()
     cfg = load_config(secrets.config_path)
-    setup_logging(secrets.db_path)
+    setup_logging(secrets.database_path)
 
     if args.cmd == "run":
-        asyncio.run(run_bot(secrets, cfg))
+        try:
+            asyncio.run(run_app(open_browser=args.open))
+        except KeyboardInterrupt:
+            print("stopped")
     elif args.cmd in ("status", "pause", "resume", "panic"):
         if args.cmd == "panic":
             ans = input("Cancel ALL orders and SELL all bot positions at market? Type PANIC: ")

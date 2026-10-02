@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moneymaker"
-version = "0.1.0"
+version = "0.2.0"
 description = "Personal spot-trading bot for Tokocrypto with a hard risk engine and kill switch"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,6 +26,9 @@ moneymaker = "moneymaker.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+moneymaker = ["web/**/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -12,13 +12,27 @@ export function fmtNum(n: number | null | undefined, maxFrac = 2, minFrac = 0): 
   return n.toLocaleString("id-ID", { minimumFractionDigits: minFrac, maximumFractionDigits: maxFrac });
 }
 
-/** Jumlah uang dengan label quote, mis. "1.234,56 USDT" */
+/** Jumlah uang dengan label quote, mis. "1.234,56 USDT"; untuk IDR: "Rp 25.000" */
 export function fmtMoney(n: number | null | undefined, quote: string, signed = false): string {
   if (n == null || !Number.isFinite(n)) return "–";
   const big = Math.abs(n) >= 1000;
   const s = fmtNum(Math.abs(n), big ? 0 : 2, big ? 0 : 2);
   const sign = n < 0 ? "-" : signed && n > 0 ? "+" : "";
-  return `${sign}${s} ${quote}`;
+  return quote === "IDR" ? `${sign}Rp ${s}` : `${sign}${s} ${quote}`;
+}
+
+/** Nilai besar ringkas, mis. "Rp 4,5 M" (miliar) / "Rp 450 jt" untuk IDR */
+export function fmtCompactMoney(n: number | null | undefined, quote: string): string {
+  if (n == null || !Number.isFinite(n)) return "–";
+  if (quote !== "IDR") {
+    const s = n.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 1 });
+    return `${s} ${quote}`;
+  }
+  const a = Math.abs(n);
+  if (a >= 1e12) return `Rp ${fmtNum(n / 1e12, 1)} T`;
+  if (a >= 1e9) return `Rp ${fmtNum(n / 1e9, 1)} M`;
+  if (a >= 1e6) return `Rp ${fmtNum(n / 1e6, 0)} jt`;
+  return fmtMoney(n, quote);
 }
 
 /** Harga: lebih banyak desimal untuk nilai kecil */

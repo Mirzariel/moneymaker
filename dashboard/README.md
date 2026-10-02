@@ -1,47 +1,35 @@
 # Moneymaker Dashboard
 
-Dashboard web kecil (Next.js) untuk memantau dan mengontrol bot trading crypto: status, KPI, grafik equity, posisi, sinyal, risk events, audit log, serta tombol Pause / Resume / PANIC.
+Dashboard web (Next.js, diekspor jadi file statis) untuk mengisi API key, mengecek kesiapan, lalu memantau dan mengontrol bot: status, KPI, grafik equity, posisi, sinyal, risk events, audit log, serta Pause / Resume / PANIC.
 
-## Menjalankan
+## Cara pakai (pengguna)
 
-1. Salin contoh env lalu isi token yang sama dengan `API_TOKEN` di bot:
+UI **disajikan langsung oleh bot** (FastAPI) di <http://127.0.0.1:8000>. Tidak ada server Node yang perlu dijalankan. Buka lewat link login yang muncul di jendela terminal saat bot start (`/login?token=...`); link itu memasang cookie sesi HttpOnly. Tanpa cookie, halaman hanya menampilkan petunjuk untuk membuka link tersebut.
 
-   ```bash
-   cp .env.example .env.local
-   # edit .env.local
-   #   BOT_API_URL=http://127.0.0.1:8000
-   #   BOT_API_TOKEN=<token-bot-kamu>
-   ```
+Alur: wizard Pengaturan (API Tokocrypto, Telegram, alarm) -> Cek kesiapan -> Mulai trading -> dashboard. Tombol **Pengaturan** dan **Cek kesiapan** tersedia di header dashboard.
 
-2. Install dan jalankan:
-
-   ```bash
-   npm install
-   npm run dev                 # mode development  -> http://127.0.0.1:3000
-   # atau
-   npm run build && npm run start   # mode produksi -> http://127.0.0.1:3000
-   ```
-
-   (`next start` menampilkan peringatan karena `output: "standalone"`; tetap berfungsi. Untuk Docker, image memakai `node server.js`.)
-
-3. Uji tanpa bot asli: `node scripts/mock-bot.mjs` (token mock: `test-token-1234567890`, set `MOCK_MODE=live` untuk mode live).
-
-## Docker (opsional)
+## Pengembangan UI
 
 ```bash
-docker build -t moneymaker-dashboard .
-docker run --rm -p 127.0.0.1:3000:3000 \
-  -e BOT_API_URL=http://host.docker.internal:8000 -e BOT_API_TOKEN=... moneymaker-dashboard
+npm install
+node scripts/mock-bot.mjs    # mock bot di http://127.0.0.1:8000 (menyajikan out/ + API tiruan)
+npm run build                # bangun ulang out/ setiap habis mengubah UI (mock membaca out/ tiap request)
 ```
 
-Gunakan `-p 127.0.0.1:3000:3000` agar tetap hanya bisa diakses dari laptop sendiri.
+Buka <http://127.0.0.1:8000/login?token=test-token-1234567890>. Mock mulai di mode setup (isi key apa saja; key yang mengandung "bad" ditolak); `MOCK_RUNNING=1` untuk langsung ke dashboard, `MOCK_MODE=live` untuk mode live.
 
-## Catatan keamanan
+(`npm run dev` tetap ada untuk Next dev server di :3000, tetapi UI memanggil `/api/...` di origin yang sama, jadi dev server tidak punya backend. Pakai mock di atas.)
 
-- **Token API hanya ada di sisi server.** Browser hanya memanggil `/api/bot/*` pada server Next.js; route handler di `app/api/bot/[...path]/route.ts` yang menambahkan header `Authorization: Bearer ...`. Token tidak pernah dikirim ke browser (jangan memakai awalan `NEXT_PUBLIC_`).
-- Proxy hanya meneruskan path yang di-allowlist (GET: health, status, positions, orders, equity, signals, risk-events, audit, config; POST: pause, resume, panic). Selain itu 404. Request POST harus `application/json` dan, bila ada header `Origin`, harus sama dengan host dashboard (proteksi CSRF dari situs lain).
-- Server dashboard **hanya bind ke 127.0.0.1** (script `dev`/`start`). Dashboard ini tidak punya login sendiri, jadi jangan diekspos ke jaringan/internet.
-- Jangan commit `.env.local` (sudah ada di `.gitignore`).
+## Setelah mengubah UI
 
-## Akses dari host lain
-Proxy hanya menerima Host `127.0.0.1`, `localhost`, `[::1]` (proteksi DNS rebinding). Kalau perlu nama host lain (mis. Tailscale), set `DASHBOARD_ALLOWED_HOSTS=nama-host` di `.env.local`.
+```bash
+npm run export     # next build + salin out/ ke ../src/moneymaker/web/
+```
+
+Lalu **commit folder `src/moneymaker/web/`** — itulah yang dipakai bot, sehingga pengguna tidak perlu Node.
+
+## Keamanan
+
+- Browser tidak pernah melihat token; autentikasi hanya cookie `HttpOnly; SameSite=Strict` dari backend.
+- Semua request same-origin ke `/api/*`. Respons 401 menampilkan "Sesi tidak valid"; 409 pada `/api/status` berarti bot belum berjalan (mode setup).
+- Bot hanya bind ke 127.0.0.1; jangan diekspos ke jaringan/internet.

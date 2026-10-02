@@ -1,24 +1,14 @@
-# Laptop now, VPS later: the same file works on both.  docker compose up -d --build
+# Alternative to start.sh/start.bat (e.g. on a VPS):  docker compose up -d --build
+# Then open the login link printed in:  docker compose logs bot | grep login
 services:
   bot:
     build: .
     restart: unless-stopped          # comes back after crashes and reboots
-    env_file: .env
     environment:
       API_HOST: 0.0.0.0              # inside the container; exposed only on the host's localhost below
-      CONFIG_PATH: /app/config.yaml
     volumes:
       - ./data:/app/data
-      - ./config.yaml:/app/config.yaml:ro
+      - ./.env:/app/.env             # the setup page writes API keys here
+      - ./config.yaml:/app/config.yaml
     ports:
       - "127.0.0.1:8000:8000"
-
-  dashboard:
-    build: ./dashboard
-    restart: unless-stopped
-    environment:
-      BOT_API_URL: http://bot:8000
-      BOT_API_TOKEN: ${API_TOKEN}
-    ports:
-      - "127.0.0.1:3000:3000"
-    depends_on: [bot]

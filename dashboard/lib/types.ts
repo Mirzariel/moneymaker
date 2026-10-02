@@ -84,3 +84,76 @@ export interface PanicReport {
   errors: string[];
   leftover: Record<string, number>;
 }
+
+export type SetupState = "setup" | "starting" | "running" | "error";
+
+export interface SetupInfo {
+  state: SetupState;
+  error: string | null;
+  ready: boolean;
+  missing: string[];
+  live_trading: boolean;
+  quote: string;
+  fields: {
+    toko_api_key: { set: boolean; hint: string | null };
+    toko_api_secret: { set: boolean; hint: string | null };
+    telegram_bot_token: { set: boolean; hint: string | null };
+    telegram_chat_id: { set: boolean; value: string | null };
+    healthcheck_url: { set: boolean; value: string | null };
+  };
+}
+
+export interface SetupUpdate {
+  toko_api_key?: string;
+  toko_api_secret?: string;
+  live_trading?: boolean;
+  telegram_bot_token?: string;
+  telegram_chat_id?: string;
+  healthcheck_url?: string;
+}
+
+export interface TestExchangeResult {
+  ok: boolean;
+  balances?: Record<string, number>;
+  error?: string;
+}
+export interface TestTelegramResult {
+  ok: boolean;
+  error?: string;
+}
+export interface DetectChatResult {
+  ok: boolean;
+  chat_id?: string;
+  name?: string;
+  error?: string;
+}
+
+export interface PreflightMarket {
+  symbol: string;
+  quote_volume: number;
+  spread_pct: number;
+  native: boolean;
+  stop_limit: boolean;
+  tradeable: boolean;
+}
+export interface PreflightSizing {
+  symbol: string;
+  approved: boolean;
+  cost: number;
+  rule: string;
+  detail: string;
+  notes: string[];
+}
+export interface Preflight {
+  ok: boolean;
+  error?: string;
+  quote: string;
+  binance_reachable: boolean;
+  markets_active: number;
+  fees: { buy_pct: number; sell_pct: number };
+  equity: number;
+  equity_source: "balance" | "config";
+  top: PreflightMarket[];
+  sizing: PreflightSizing[];
+  warnings: string[];
+}

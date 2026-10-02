@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
     "build": "next build",
-    "start": "next start -H 127.0.0.1 -p 3000"
+    "export": "next build && node scripts/copy-export.mjs",
+    "mock": "node scripts/mock-bot.mjs"
   },
   "dependencies": {
     "next": "^16.3.8",

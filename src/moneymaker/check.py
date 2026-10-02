@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from .config import BotConfig, Secrets
 from .exchange.tokocrypto import TokocryptoClient
-from .models import BotStatus, Signal
-from .risk.engine import RiskContext, RiskEngine
+from .preflight import run_preflight
 
 
 def _line(title: str) -> None:
@@ -17,86 +15,41 @@ def _line(title: str) -> None:
 async def run_check(secrets: Secrets, cfg: BotConfig, test_symbol: str | None = None) -> None:
     ex = TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,))
     try:
+        print("Checking Tokocrypto (native markets need 2 requests each – this can take a minute)…")
+        r = await run_preflight(secrets, cfg, ex)
+        if r["error"]:
+            print(f"\nERROR: {r['error']}")
+            return
         _line("Markets")
-        markets = await ex.load_markets()
-        by_quote: dict[str, int] = {}
-        for m in markets.values():
-            if m.active:
-                by_quote[m.quote] = by_quote.get(m.quote, 0) + 1
-        print("active spot markets per quote:", dict(sorted(by_quote.items(), key=lambda x: -x[1])[:8]))
-        try:
-            await ex.ex.fetch_tickers()
-            print("api.binance.com (data for Binance-backed markets): reachable")
-        except Exception as e:  # noqa: BLE001
-            print(f"api.binance.com NOT reachable ({type(e).__name__}) – only native markets will have data")
+        print("active spot markets per quote:", r["markets_per_quote"])
+        print("api.binance.com:", "reachable" if r["binance_reachable"] else "NOT reachable")
 
         _line(f"Top {cfg.quote} markets by 24h volume")
-        print("(native markets need 2 requests each – this can take a minute)")
-        tickers = await ex.fetch_tickers()
-        rows = [(t.quote_volume, s, t) for s, t in tickers.items()
-                if s in markets and markets[s].quote == cfg.quote and markets[s].active]
-        rows.sort(reverse=True, key=lambda r: r[0])
-        print(f"{'symbol':<14}{'vol24h':>18}{'spread%':>9}{'minCost':>10}{'native':>8}{'stopLimit':>10}")
-        for vol, s, t in rows[:25]:
-            m = markets[s]
-            print(f"{s:<14}{vol:>18,.0f}{t.spread_pct:>9.3f}{m.min_cost:>10.4g}{str(m.native):>8}"
-                  f"{str(m.supports_stop_limit):>10}")
-        tradeable = [(vol, s, t) for vol, s, t in rows if vol >= cfg.scanner.min_quote_volume_24h
-                     and t.spread_pct <= cfg.scanner.max_spread_pct
-                     and (markets[s].supports_stop_limit or cfg.risk.allow_bot_side_stop)]
-        print(f"\n{len(tradeable)} {cfg.quote} markets are tradeable with your config "
-              f"(vol >= {cfg.scanner.min_quote_volume_24h:,.0f}, spread <= {cfg.scanner.max_spread_pct}%, "
-              f"stop {'exchange or bot' if cfg.risk.allow_bot_side_stop else 'exchange only'})")
-        if not tradeable:
-            print("  -> NOTHING to trade. Lower scanner.min_quote_volume_24h / raise max_spread_pct, or set "
-                  "risk.allow_bot_side_stop: true if the stopLimit column is False.")
+        print(f"{'symbol':<14}{'vol24h':>18}{'spread%':>9}{'minCost':>10}{'native':>8}{'stopLimit':>10}{'ok':>4}")
+        for t in r["top"]:
+            print(f"{t['symbol']:<14}{t['quote_volume']:>18,.0f}{t['spread_pct']:>9.3f}{t['min_cost']:>10.4g}"
+                  f"{str(t['native']):>8}{str(t['stop_limit']):>10}{'✔' if t['tradeable'] else '✗':>4}")
+        print(f"\n{r.get('tradeable_count', 0)} {cfg.quote} markets tradeable with your config")
 
-        if rows:
-            s = rows[0][1]
-            candles = await ex.fetch_ohlcv(s, cfg.timeframe, 5)
-            print(f"\nOHLCV {s} {cfg.timeframe}: {len(candles)} candles, last close {candles[-1].close if candles else '-'}")
+        _line("Account")
+        print("balances:", r["balances"] or ("none" if secrets.toko_api_key else "(no API key – skipped)"))
+        print(f"fees in config: buy {cfg.fees.buy_pct}% / sell {cfg.fees.sell_pct}% (all-in)")
 
-        equity = cfg.paper.starting_quote_balance
-        if secrets.toko_api_key and secrets.toko_api_secret:
-            _line("Account (private, read-only)")
-            bal = await ex.fetch_balance()
-            nonzero = {k: v for k, v in bal.total.items() if v > 0}
-            print("non-zero balances:", nonzero or "none")
-            equity = bal.total_of(cfg.quote) or equity
-            try:
-                fees = await ex.ex.fetch_trading_fees()
-                sample = fees.get(rows[0][1]) if rows else None
-                print("trading fees (API):", sample or fees)
-            except Exception as e:  # noqa: BLE001
-                print(f"trading fees not available via API ({type(e).__name__}).")
-        else:
-            print("\n(no API key in .env – skipping private checks)")
-        print(f"config fees: buy {cfg.fees.buy_pct}% / sell {cfg.fees.sell_pct}% (all-in). "
-              f"Compare with the fee page in your Tokocrypto account.")
-
-        if tradeable:
-            _sizing_preview(cfg, equity, [(s, t, markets[s]) for _, s, t in tradeable[:5]])
+        if r["sizing"]:
+            _line(f"Order size preview for equity {r['equity']:,.2f} {cfg.quote} ({r['equity_source']})")
+            for z in r["sizing"]:
+                if z["approved"]:
+                    notes = f" · {'; '.join(z['notes'])}" if z["notes"] else ""
+                    print(f"{z['symbol']:<14} BUY {z['cost']:,.2f} {cfg.quote} · {z['detail']}{notes}")
+                else:
+                    print(f"{z['symbol']:<14} REJECTED {z['rule']}: {z['detail']}")
+        for w in r["warnings"]:
+            print(f"⚠️  {w}")
         if test_symbol and secrets.toko_api_key:
+            markets = await ex.load_markets()
             await _test_orders(ex, test_symbol, markets, cfg.risk.min_order_quote)
     finally:
         await ex.close()
-
-
-def _sizing_preview(cfg: BotConfig, equity: float, items) -> None:
-    """Show what the risk engine would do with a typical signal (stop 3% below, target 6% above)."""
-    _line(f"Order size preview for equity {equity:,.2f} {cfg.quote}")
-    risk = RiskEngine(cfg.risk, cfg.fees, cfg.scanner.min_quote_volume_24h, cfg.scanner.max_spread_pct)
-    now = time.time()
-    for sym, t, m in items:
-        sig = Signal(sym, "buy", t.ask, t.ask * 0.97, t.ask * 1.06, now, now + 60, "preview")
-        ctx = RiskContext(now=now, status=BotStatus.RUNNING, equity=equity, quote_free=equity, exposure=0.0,
-                          open_symbols=set(), day_start_equity=equity, day_pnl=0.0, consecutive_losses=0,
-                          ticker=t, market=m, last_entry_ts=None)
-        d = risk.evaluate(sig, ctx)
-        if d.approved:
-            print(f"{sym:<14} BUY {d.cost:,.2f} {cfg.quote} · {d.detail}" + (f" · {'; '.join(d.notes)}" if d.notes else ""))
-        else:
-            print(f"{sym:<14} REJECTED {d.rule}: {d.detail}")
 
 
 async def _test_orders(ex: TokocryptoClient, symbol: str, markets, min_order_quote: float = 0.0) -> None:

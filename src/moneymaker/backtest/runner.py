@@ -85,7 +85,7 @@ def backtest(symbol: str, candles: list[Candle], cfg: BotConfig, start_equity: f
     last_trade_ts: float | None = None
 
     def close(i: int, price: float, reason: str) -> None:
-        nonlocal cash, pos, last_trade_ts
+        nonlocal cash, pos
         gross = pos["qty"] * price
         f = gross * sell_fee
         res.fees_paid += f

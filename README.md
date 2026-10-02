@@ -18,16 +18,25 @@ Bot ini memantau pasar, mencari sinyal, memeriksa setiap sinyal lewat risk engin
 | `fees` | beli 0,2222% / jual 0,4322% | biaya all-in Tokocrypto pair IDR (fee + ICEx + PPh 0,21%) |
 | `allow_bot_side_stop` | true | kalau pair IDR tidak menerima stop-limit di exchange, bot menjaga stop sendiri (hanya selama bot menyala) |
 
-Langkahnya (±15 menit):
-1. Buat API key Tokocrypto: **Read + Spot Trading saja, tanpa Withdraw**. Deposit Rp100rb.
-2. `cp .env.example .env` (sudah `LIVE_TRADING=true`, `DB_PATH=data/live.db`), isi API key, Telegram, `API_TOKEN`, `HEALTHCHECK_URL`.
-3. `cp config.example.yaml config.yaml`
-4. **`moneymaker check`** – wajib, 1–2 menit. Pastikan:
-   - ada market di bagian *tradeable* (kalau 0, turunkan `scanner.min_quote_volume_24h`),
-   - kolom `native` / `stopLimit` – kalau `stopLimit` False, stop dijaga bot (laptop harus tetap menyala),
-   - bagian **Order size preview** menunjukkan BUY Rp25rb–50rb, bukan REJECTED.
-5. `moneymaker run`, lalu kirim `/resume` di Telegram. Bot mulai trading.
-6. Coba `/pause` dan `/status`. Kalau ingin keluar total: `/panic CONFIRM`.
+### Cara pakai (klik dua kali)
+
+**Sekali saja:** install Python 3.11+ dari https://www.python.org/downloads/ (Windows: centang *Add python.exe to PATH*), lalu clone/download repo ini.
+
+1. Jalankan launcher:
+   - **Windows:** klik dua kali `start.bat`
+   - **macOS:** klik dua kali `start.command` (pertama kali: klik kanan → Open)
+   - **Linux:** `./start.sh`
+
+   Run pertama menginstal semuanya otomatis (beberapa menit). Setelah itu **browser terbuka sendiri** ke dashboard.
+2. Di halaman **Setup**:
+   1. Tempel API key dan Secret key dari Tokocrypto (izin **Read + Spot Trading saja, JANGAN Withdraw**), lalu klik **Tes koneksi**. Saldo IDR-mu akan muncul.
+   2. Telegram (disarankan): buat bot di @BotFather, tempel token-nya, kirim `/start` ke bot itu, lalu klik **Deteksi otomatis** dan **Kirim pesan tes**.
+   3. Opsional: URL healthchecks.io untuk alarm kalau laptop/bot mati.
+   4. Klik **Simpan & jalankan**.
+3. Halaman **Cek kesiapan** muncul. Pastikan ada market yang lolos dan contoh order menunjukkan **BUY Rp25rb–50rb**, bukan ditolak.
+4. Klik **Mulai trading**. Selesai. Jendela terminal/launcher **jangan ditutup**: menutupnya = bot berhenti.
+
+Semua pengaturan tersimpan di `.env` (dibuat otomatis, tidak pernah ikut ter-commit). Buka lagi kapan saja lewat tombol **Pengaturan** di dashboard. Kalau tab browser tertutup, buka link yang tercetak di jendela launcher.
 
 Bot memakai candle 1 jam, jadi wajar kalau berjam-jam atau berhari-hari tidak ada trade: sinyal hanya muncul saat ada breakout yang targetnya cukup jauh untuk menutup fee.
 
@@ -51,7 +60,8 @@ Scanner → Strategy → Signal → RiskEngine (bisa REJECT) → Executor → To
 | Pause / resume / PANIC | `src/moneymaker/control.py` |
 | Telegram, API, heartbeat | `notify/telegram.py`, `api/app.py`, `heartbeat.py` |
 | Backtest | `src/moneymaker/backtest/runner.py` |
-| Dashboard (Next.js) | `dashboard/` |
+| Setup page + dashboard (Next.js, build statis disajikan bot) | `dashboard/` → `src/moneymaker/web/` |
+| Launcher, supervisor, setup | `start.bat` / `start.command` / `start.sh`, `runtime.py`, `setup_tools.py`, `preflight.py` |
 
 ## Fitur keamanan
 
@@ -69,18 +79,19 @@ Scanner → Strategy → Signal → RiskEngine (bisa REJECT) → Executor → To
 - **PANIC.** Urutannya: status PAUSED disimpan *duluan*, lalu cancel semua order per simbol, jual semua posisi, verifikasi saldo, dan kirim laporan. Setelah restart bot tetap PAUSED.
 - **Rekonsiliasi saat start.** Bot mendeteksi stop yang terisi saat offline, memasang ulang stop yang hilang, dan auto-pause kalau ada order dengan hasil tak jelas. Tidak ada trading sebelum rekonsiliasi berhasil.
 - **Heartbeat ke healthchecks.io.** Kalau laptop atau bot mati, kamu tetap dapat alert (bot yang mati tidak bisa mengabari sendiri).
-- **API dan dashboard hanya di `127.0.0.1`.** Akses pakai token, token tidak pernah sampai ke browser, dan ada proteksi CSRF + DNS rebinding.
+- **Dashboard hanya di `127.0.0.1`.** Login lewat link berisi kode akses dari launcher → cookie HttpOnly; kode akses tidak pernah ada di JavaScript. Proteksi CSRF + DNS rebinding. API secret tidak pernah dikirim balik ke browser.
 - **Database paper dan live tidak bisa tercampur.** Bot menolak start kalau mode tidak cocok dengan DB.
 
-## Setup (laptop)
+## Setup manual (tanpa launcher / untuk developer)
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
-cp .env.example .env
-cp config.example.yaml config.yaml
-pytest                     # harus semua hijau
+pytest                       # harus semua hijau
+moneymaker run --open        # membuat .env + config.yaml kalau belum ada, lalu membuka setup page
 ```
+
+Semua langkah di bawah juga bisa dilakukan tanpa browser, dengan mengedit `.env` langsung.
 
 ### 1. API key Tokocrypto
 Buat API key di Tokocrypto dengan izin **Read + Spot Trading saja. JANGAN aktifkan Withdraw.** Isi `TOKO_API_KEY` dan `TOKO_API_SECRET` di `.env`. Nanti kalau sudah pakai VPS, aktifkan IP whitelist.
@@ -104,7 +115,7 @@ Lihat return, profit factor (> 1.2 baru menarik), max drawdown, dan bandingkan d
 
 ### 4. Telegram
 1. Buat bot lewat @BotFather, lalu isi `TELEGRAM_BOT_TOKEN`.
-2. Kirim pesan ke @userinfobot untuk tahu chat id-mu, lalu isi `TELEGRAM_CHAT_ID`. Bot hanya melayani chat id ini.
+2. Kirim `/start` ke bot itu, lalu di setup page klik **Deteksi otomatis** (atau tanya @userinfobot dan isi `TELEGRAM_CHAT_ID`). Bot hanya melayani chat id ini.
 3. Perintah yang tersedia: `/status`, `/positions`, `/pnl`, `/pause`, `/resume`, `/panic` (lalu `/panic CONFIRM`).
 
 ### 5. Heartbeat
@@ -112,14 +123,13 @@ Buat check gratis di https://healthchecks.io (period 5 menit, grace 10 menit), h
 
 ### 6. Jalankan
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"   # isi API_TOKEN di .env
-moneymaker run
+moneymaker run          # API_TOKEN dibuat otomatis; link login tercetak di terminal
 ```
-Kirim `/resume` dari Telegram. Untuk dashboard, lihat `dashboard/README.md` (`npm install && npm run build && npm run start`, lalu buka http://127.0.0.1:3000).
+Kirim `/resume` dari Telegram atau klik **Mulai trading** di dashboard (http://127.0.0.1:8000, disajikan langsung oleh bot – tidak perlu Node.js). Kode tampilan ada di `dashboard/`; hasil build-nya di `src/moneymaker/web/`.
 
 Atau semuanya lewat Docker (auto-restart):
 ```bash
-docker compose up -d --build     # config.yaml HARUS sudah ada sebelum ini
+docker compose up -d --build     # .env dan config.yaml HARUS sudah ada sebelum ini
 ```
 
 ### Perintah CLI
@@ -131,14 +141,14 @@ moneymaker panic          # minta ketik PANIC; pakai API bot yang sedang jalan, 
 ## Laptop harus tetap menyala
 Bot berhenti kalau laptop sleep, mati, atau internet putus. Posisi tetap terlindungi stop-loss di exchange, tapi tidak ada entry atau take-profit selama mati. Cara mencegah sleep:
 - **Windows:** Settings → System → Power → Sleep = *Never* (saat dicolok). Tutup layar: Control Panel → Power Options → "When I close the lid" = *Do nothing*.
-- **macOS:** `caffeinate -dimsu moneymaker run`, atau System Settings → Battery → Options → "Prevent automatic sleeping…".
-- **Linux:** `systemd-inhibit --what=sleep:idle moneymaker run`.
+- **macOS / Linux:** `start.sh` / `start.command` otomatis menahan sleep (`caffeinate` / `systemd-inhibit`) selama bot jalan. Menutup layar laptop tetap bisa membuat sleep, kecuali dicolok ke charger + monitor (macOS) atau setting lid diubah.
+- **Windows:** bot menahan sleep otomatis selama jendela launcher terbuka, tapi menutup layar laptop tetap mengikuti setting "When I close the lid".
 
 ## Pindah ke VPS
-1. Salin repo, `.env`, dan `config.yaml` ke VPS (Ubuntu + Docker).
-2. Jalankan `docker compose up -d --build`.
+1. Salin repo, `.env`, dan `config.yaml` ke VPS (Ubuntu + Docker). Kedua file harus sudah ada sebelum langkah 2.
+2. Jalankan `docker compose up -d --build`, lalu ambil link login: `docker compose logs bot | grep login`.
 3. Aktifkan IP whitelist API key di Tokocrypto (IP statis VPS).
-4. Dashboard tetap bind ke localhost. Akses lewat SSH tunnel (`ssh -L 3000:127.0.0.1:3000 vps`) atau Tailscale. **Jangan buka port ke publik.**
+4. Dashboard tetap bind ke localhost VPS. Akses lewat SSH tunnel (`ssh -L 8000:127.0.0.1:8000 vps`, lalu buka link login di laptop) atau Tailscale (`DASHBOARD_ALLOWED_HOSTS=nama-tailscale`). **Jangan buka port ke publik.**
 
 ## Checklist go-live (uang asli)
 - [ ] `pytest` hijau

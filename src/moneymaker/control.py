@@ -80,7 +80,7 @@ class ControlService:
                     self.engine.cycle_lock.release()
 
             self.store.audit(actor, "panic", str(report))
-            lines = [f"🚨 PANIC done. Bot stays PAUSED until you /resume.",
+            lines = ["🚨 PANIC done. Bot stays PAUSED until you /resume.",
                      f"cancelled orders: {report['cancelled']}",
                      f"sold: {', '.join(report['sold']) or '-'}"]
             if report["errors"]:

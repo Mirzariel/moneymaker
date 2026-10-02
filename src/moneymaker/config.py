@@ -31,8 +31,23 @@ class Secrets(BaseSettings):
     healthcheck_url: str = ""
 
     config_path: str = "config.yaml"
-    db_path: str = "data/moneymaker.db"
+    # Empty = data/live.db or data/paper.db depending on LIVE_TRADING (the bot never mixes the two).
+    db_path: str = ""
     paper_state_path: str = "data/paper_state.json"
+
+    @property
+    def database_path(self) -> str:
+        return self.db_path or ("data/live.db" if self.live_trading else "data/paper.db")
+
+    def missing_for_start(self) -> list[str]:
+        """Fields that must be filled in before the bot can trade."""
+        missing = []
+        if self.live_trading:
+            if not self.toko_api_key:
+                missing.append("toko_api_key")
+            if not self.toko_api_secret:
+                missing.append("toko_api_secret")
+        return missing
 
 
 class ScannerConfig(BaseModel):
