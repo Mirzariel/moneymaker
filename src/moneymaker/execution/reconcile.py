@@ -28,7 +28,7 @@ async def reconcile(engine: "Engine") -> list[str]:
         store.set_status(BotStatus.PAUSED, "reconcile: unknown entry orders")
 
     # 2. Every open position: stop filled while we were away? stop missing? re-protect.
-    tickers = await ex.fetch_tickers()
+    tickers = {p.symbol: await ex.fetch_ticker(p.symbol) for p in store.open_positions()}
     before = {p.id for p in store.open_positions()}
     await engine.manage_positions(tickers)
     after = {p.id for p in store.open_positions()}

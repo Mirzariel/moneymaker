@@ -13,9 +13,10 @@ def _line(title: str) -> None:
 
 
 async def run_check(secrets: Secrets, cfg: BotConfig, test_symbol: str | None = None) -> None:
-    ex = TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,))
+    ex = TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,),
+                          rate_limit_ms=cfg.exchange_rate_limit_ms)
     try:
-        print("Checking Tokocrypto (native markets need 2 requests each – this can take a minute)…")
+        print("Checking Tokocrypto (about 1 request / 2 s – takes ~1 minute)…")
         r = await run_preflight(secrets, cfg, ex)
         if r["error"]:
             print(f"\nERROR: {r['error']}")
@@ -29,7 +30,8 @@ async def run_check(secrets: Secrets, cfg: BotConfig, test_symbol: str | None = 
         for t in r["top"]:
             print(f"{t['symbol']:<14}{t['quote_volume']:>18,.0f}{t['spread_pct']:>9.3f}{t['min_cost']:>10.4g}"
                   f"{str(t['native']):>8}{str(t['stop_limit']):>10}{'✔' if t['tradeable'] else '✗':>4}")
-        print(f"\n{r.get('tradeable_count', 0)} {cfg.quote} markets tradeable with your config")
+        print(f"\n{r.get('tradeable_count', 0)} of {r['candidates_checked']} well-known coins tradeable; "
+              f"{r['alts_available']} other {cfg.quote} pairs go to the market radar (alt sleeve)")
 
         _line("Account")
         print("balances:", r["balances"] or ("none" if secrets.toko_api_key else "(no API key – skipped)"))

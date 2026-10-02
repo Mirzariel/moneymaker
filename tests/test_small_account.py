@@ -93,6 +93,8 @@ def test_no_exchange_stop_rejected_unless_allowed(preset):
 @pytest.fixture
 def small(tmp_path, preset):
     preset.paper.slippage_pct = 0.0
+    preset.learning.require_validated_edge = False  # sizing test; the learning gate has its own tests
+    preset.sleeves.alts.enabled = False
     md = StaticMarketData({SYM: idr_market(stop_limit=False)})
     candles = breakout_candles(start=1.2e9, end=1.45e9, last_close=1.5e9)
     md.candles[SYM] = candles

@@ -6,8 +6,10 @@ Host-header allowlist blocks DNS rebinding; POSTs must be JSON and same-origin (
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import math
 import os
 import time
 from pathlib import Path
@@ -51,6 +53,17 @@ class ExchangeTestBody(BaseModel):
 class TelegramTestBody(BaseModel):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+
+
+def clean(x: Any) -> Any:
+    """JSON can't carry NaN/Infinity (Starlette refuses them); market math can produce them."""
+    if isinstance(x, float):
+        return x if math.isfinite(x) else None
+    if isinstance(x, dict):
+        return {k: clean(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [clean(v) for v in x]
+    return x
 
 
 def _session_value(token: str) -> str:
@@ -158,12 +171,48 @@ def create_app(runtime, allowed_hosts: set[str] | None = None) -> FastAPI:
 
     @app.get("/api/preflight", dependencies=[Depends(auth)])
     async def preflight() -> dict[str, Any]:
-        return await run_preflight(runtime.secrets, runtime.cfg)
+        try:
+            return clean(await asyncio.wait_for(run_preflight(runtime.secrets, runtime.cfg), timeout=165))
+        except asyncio.TimeoutError:
+            return {"ok": False, "error": "Cek kesiapan melebihi batas waktu (Tokocrypto lambat merespons). Coba lagi.",
+                    "quote": runtime.cfg.quote, "binance_reachable": False, "markets_active": 0, "fees": {
+                        "buy_pct": runtime.cfg.fees.buy_pct, "sell_pct": runtime.cfg.fees.sell_pct},
+                    "equity": 0, "equity_source": "config", "top": [], "sizing": [], "warnings": [],
+                    "candidates_checked": 0}
+
+    # ---- learning model + market radar ----------------------------------------------------
+    def engine():
+        c = runtime.control
+        if c is None:
+            raise HTTPException(status_code=409, detail=f"bot is not running (state: {runtime.state})")
+        return c.engine
+
+    def model_payload(eng) -> dict[str, Any]:
+        lc = eng.cfg.learning
+        return {"learning_enabled": lc.enabled, "require_validated_edge": lc.require_validated_edge,
+                "sleeves": eng.model.load(), "job": eng.trainer.job, "next_training_at": eng.next_training_at(),
+                "live": {s: eng.model.live_stats(s) for s in ("majors", "alts")},
+                "history": eng.store.get("model_history") or []}
+
+    @app.get("/api/model", dependencies=[Depends(auth)])
+    async def model() -> dict[str, Any]:
+        return clean(model_payload(engine()))
+
+    @app.post("/api/model/train", dependencies=[Depends(auth)])
+    async def model_train() -> dict[str, Any]:
+        eng = engine()
+        eng.trainer.start(tuple(s for s in ("majors", "alts") if getattr(eng.cfg.sleeves, s).enabled))
+        await asyncio.sleep(0)
+        return clean(model_payload(eng))
+
+    @app.get("/api/radar", dependencies=[Depends(auth)])
+    async def radar() -> dict[str, Any]:
+        return clean(engine().sweeper.as_dict())
 
     # ---- bot -------------------------------------------------------------------------------
     @app.get("/api/status", dependencies=[Depends(auth)])
     async def status() -> dict[str, Any]:
-        return control().status()
+        return clean(control().status())
 
     @app.get("/api/positions", dependencies=[Depends(auth)])
     async def positions(status: Literal["open", "closed", "all"] = "open",

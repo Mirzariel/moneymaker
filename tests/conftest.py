@@ -22,6 +22,10 @@ def make_cfg(**risk) -> BotConfig:
     cfg.fees.sell_pct = 0.1
     cfg.paper.slippage_pct = 0.0
     cfg.scanner.min_quote_volume_24h = 1_000
+    # Classic single-strategy setup: no learning gate, majors only, 1% risk.
+    cfg.learning.require_validated_edge = False
+    cfg.sleeves.alts.enabled = False
+    cfg.sleeves.majors.risk_per_trade_pct = 1.0
     for k, v in risk.items():
         setattr(cfg.risk, k, v)
     return cfg

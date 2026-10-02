@@ -33,12 +33,26 @@ Bot ini memantau pasar, mencari sinyal, memeriksa setiap sinyal lewat risk engin
    2. Telegram (disarankan): buat bot di @BotFather, tempel token-nya, kirim `/start` ke bot itu, lalu klik **Deteksi otomatis** dan **Kirim pesan tes**.
    3. Opsional: URL healthchecks.io untuk alarm kalau laptop/bot mati.
    4. Klik **Simpan & jalankan**.
-3. Halaman **Cek kesiapan** muncul. Pastikan ada market yang lolos dan contoh order menunjukkan **BUY Rp25rb–50rb**, bukan ditolak.
-4. Klik **Mulai trading**. Selesai. Jendela terminal/launcher **jangan ditutup**: menutupnya = bot berhenti.
+3. Halaman **Cek kesiapan** muncul (±1 menit). Pastikan contoh order menunjukkan **BUY Rp25rb–50rb**, bukan ditolak.
+4. Klik **Mulai trading**. Bot langsung memindai pasar dan melatih model (±5–10 menit pertama, lihat tab **Model**); entry baru terjadi hanya di kantong yang lolos uji. Selesai. Jendela terminal/launcher **jangan ditutup**: menutupnya = bot berhenti.
 
 Semua pengaturan tersimpan di `.env` (dibuat otomatis, tidak pernah ikut ter-commit). Buka lagi kapan saja lewat tombol **Pengaturan** di dashboard. Kalau tab browser tertutup, buka link yang tercetak di jendela launcher.
 
 Bot memakai candle 1 jam, jadi wajar kalau berjam-jam atau berhari-hari tidak ada trade: sinyal hanya muncul saat ada breakout yang targetnya cukup jauh untuk menutup fee.
+
+## Bot yang belajar (model) dan radar pasar
+
+- **Radar pasar** memindai **semua pair IDR** bergiliran di latar belakang (±1 request per 2 detik, jadi satu putaran ±5 menit) dan membaginya menjadi dua kantong:
+  - **Koin terkenal** (BTC, ETH, SOL, …): strategi *breakout tren*.
+  - **Koin kecil / alt**: strategi *lonjakan volume* dengan **trailing stop** (stop ikut naik, jadi bisa ikut kenaikan besar).
+- **Filter koin kecil**: stablecoin, token leverage, listing < 30 hari, volume kecil, spread lebar, order book tipis, dan koin yang sudah naik > 30% dalam 24 jam dibuang. **Rezim BTC**: kalau BTC melemah, alt tidak boleh entry; kalau BTC bergerak ekstrem, semua entry ditahan.
+- **Learning (walk-forward)**: setiap kantong mengunduh riwayat harga Tokocrypto 120 hari, mencoba banyak kombinasi parameter (timeframe 15m–4h, jarak stop, target, panjang breakout), memilih yang terbaik dari **70% data awal**, lalu mengujinya di **30% data terakhir yang tidak dipakai saat memilih**.
+  - Kantong hanya boleh trade kalau **lolos uji** setelah fee (koin terkenal PF ≥ 1,15; alt PF ≥ 1,3, lebih ketat karena data alt cenderung terlalu optimis). Kalau tidak lolos, kantong itu **diam**.
+  - Latih ulang otomatis tiap 7 hari, atau tombol **Latih ulang** di tab *Model*, atau `moneymaker train`.
+  - **Pemantau live**: kalau 5 trade live rugi berturut-turut atau profit factor live < 0,8, kantong dijeda dan model dilatih ulang.
+- Jujur: lolos uji ≠ pasti untung. Kenaikan < ±2% tidak bisa dipanen karena fee + pajak ±0,65% per beli-jual.
+
+Telegram dan healthchecks.io **opsional**: semua bisa dipantau dari dashboard (tab Dashboard, Radar pasar, Model, Cek kesiapan, Pengaturan).
 
 ## Alur
 

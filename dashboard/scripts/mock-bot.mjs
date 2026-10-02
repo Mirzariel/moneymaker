@@ -91,6 +91,7 @@ function preflightObj() {
       { symbol: "SOL/IDR", approved: true, cost: 410_000, rule: "ok", detail: "ok", notes: ["dibatasi max_position_pct"] },
       { symbol: "DOGE/IDR", approved: false, cost: 0, rule: "min_notional", detail: "nilai order Rp 8.200 di bawah minimum Tokocrypto Rp 20.000", notes: ["naikkan risk_per_trade_pct atau saldo"] },
     ],
+    candidates_checked: 38,
     warnings: ["XRP/IDR tidak punya order stop-limit, jadi tidak bisa memakai stop-loss di bursa dan dilewati."],
   };
 }
@@ -112,12 +113,14 @@ function statusObj() {
     day_pnl: 87.31 * K,
     universe: ["BTC/IDR", "ETH/IDR", "SOL/IDR", "BNB/IDR"],
     server_time: now(),
+    model: { majors: modelObj().sleeves.majors.status, alts: modelObj().sleeves.alts.status },
+    regime: REGIME,
   };
 }
 
 const openPositions = [
-  { id: 12, symbol: "BTC/IDR", status: "open", amount: 0.0231, entry_price: 64210.5 * K, cost: 1483.2 * K, stop_price: 62900 * K, take_profit: 67500 * K, stop_order_id: "stp-9981", opened_at: now() - 7200, closed_at: null, exit_price: null, proceeds: null, pnl: null, fees: 1.48 * K, exit_reason: null, last_price: 64890.1 * K, unrealized_pnl: 15.7 * K },
-  { id: 13, symbol: "SOL/IDR", status: "open", amount: 10.5, entry_price: 155.42 * K, cost: 1631.9 * K, stop_price: 150.1 * K, take_profit: 168 * K, stop_order_id: null, opened_at: now() - 3000, closed_at: null, exit_price: null, proceeds: null, pnl: null, fees: 1.63 * K, exit_reason: null, last_price: 153.8 * K, unrealized_pnl: -17.0 * K },
+  { id: 12, symbol: "BTC/IDR", status: "open", amount: 0.0231, entry_price: 64210.5 * K, cost: 1483.2 * K, stop_price: 62900 * K, take_profit: 67500 * K, stop_order_id: "stp-9981", opened_at: now() - 7200, closed_at: null, exit_price: null, proceeds: null, pnl: null, fees: 1.48 * K, exit_reason: null, last_price: 64890.1 * K, unrealized_pnl: 15.7 * K, sleeve: "majors", trailing: 1, highest: 65120 * K },
+  { id: 13, symbol: "SOL/IDR", status: "open", amount: 10.5, entry_price: 155.42 * K, cost: 1631.9 * K, stop_price: 150.1 * K, take_profit: 168 * K, stop_order_id: null, opened_at: now() - 3000, closed_at: null, exit_price: null, proceeds: null, pnl: null, fees: 1.63 * K, exit_reason: null, last_price: 153.8 * K, unrealized_pnl: -17.0 * K, sleeve: "alts", trailing: 0, highest: 156.2 * K },
 ];
 
 const reasons = ["take_profit", "stop_loss", "take_profit", "manual", "stop_loss"];
@@ -132,7 +135,7 @@ const closedPositions = Array.from({ length: 12 }, (_, i) => {
     stop_price: entry * 0.98, take_profit: entry * 1.03, stop_order_id: null,
     opened_at: now() - 86400 * (i + 1), closed_at: now() - 86400 * (i + 1) + 5400, exit_price: exit,
     proceeds: exit * amount, pnl: (exit - entry) * amount - 1.2 * K, fees: 1.2 * K, exit_reason: reasons[i % reasons.length],
-    last_price: null, unrealized_pnl: null,
+    last_price: null, unrealized_pnl: null, sleeve: i % 4 === 3 ? "alts" : "majors", trailing: 0, highest: null,
   };
 });
 
@@ -179,6 +182,101 @@ const config = {
   strategy: { timeframe: "15m", lookback: 20, volume_ratio: 1.8 },
   risk: { max_exposure_pct: 30, risk_per_trade_pct: 0.5, daily_loss_limit_pct: 2, max_open_positions: 3 },
   universe: ["BTC/IDR", "ETH/IDR", "SOL/IDR", "BNB/IDR"],
+};
+
+
+// ---- model / radar tiruan ----
+const REGIME = {
+  btc_symbol: "BTC/IDR", btc_change_24h_pct: 1.34, btc_below_ema50: false,
+  alts_blocked: false, all_blocked: false, reason: "BTC di atas EMA50 dan pergerakan 24j wajar",
+};
+const m = (trades, wr, pf, ret, dd, avg) => ({ trades, win_rate: wr, profit_factor: pf, total_return_pct: ret, max_drawdown_pct: dd, avg_trade_pct: avg });
+const trainedAt = now() - 5 * 3600;
+const model = {
+  learning_enabled: true,
+  require_validated_edge: true,
+  sleeves: {
+    majors: {
+      status: "ok", valid: true, reason: "Lolos uji: PF uji 1,62 dengan 38 trade (minimal 30), return uji positif.",
+      timeframe: "1h", params: { breakout_lookback: 24, volume_ratio: 1.8, atr_stop_mult: 2.0, atr_tp_mult: 3.5, trail_atr_mult: 1.5 },
+      symbols: ["BTC/IDR", "ETH/IDR", "SOL/IDR", "BNB/IDR", "XRP/IDR", "DOGE/IDR"], trained_at: trainedAt,
+      train: m(112, 47.3, 1.41, 38.6, 9.2, 0.34), test: m(38, 52.6, 1.62, 14.8, 5.1, 0.39),
+      per_timeframe: [
+        { timeframe: "15m", params: { breakout_lookback: 32 }, train: m(260, 41.2, 1.08, 9.1, 14.0, 0.04), test: m(88, 38.6, 0.94, -3.2, 11.3, -0.04), passed: false },
+        { timeframe: "30m", params: { breakout_lookback: 28 }, train: m(171, 44.4, 1.22, 18.4, 11.1, 0.11), test: m(61, 45.9, 1.12, 3.1, 8.2, 0.05), passed: false },
+        { timeframe: "1h", params: { breakout_lookback: 24 }, train: m(112, 47.3, 1.41, 38.6, 9.2, 0.34), test: m(38, 52.6, 1.62, 14.8, 5.1, 0.39), passed: true },
+        { timeframe: "4h", params: { breakout_lookback: 18 }, train: m(44, 45.5, 1.35, 21.0, 8.4, 0.48), test: m(14, 42.9, 1.05, 0.9, 6.0, 0.06), passed: false },
+      ],
+    },
+    alts: {
+      status: "no_edge", valid: false, reason: "Uji gagal: PF uji 0,82 (minimal 1,3) — tidak ada kombinasi parameter yang bertahan di data baru.",
+      timeframe: "1h", params: null, symbols: ["PEPE/IDR", "WIF/IDR", "ARB/IDR", "INJ/IDR", "SUI/IDR", "TIA/IDR", "JUP/IDR", "ENA/IDR"], trained_at: trainedAt,
+      train: m(74, 43.2, 1.18, 11.5, 15.7, 0.15), test: m(22, 36.4, 0.82, -6.4, 12.9, -0.29), per_timeframe: [],
+    },
+  },
+  job: { state: "idle", sleeve: null, progress: { done: 0, total: 0, label: "" }, started_at: null, finished_at: trainedAt, error: null },
+  next_training_at: now() + 19 * 3600,
+  live: {
+    majors: { trades: 7, profit_factor: 1.9, win_rate: 57.1, consecutive_losses: 1, status: "sehat" },
+    alts: { trades: 0, profit_factor: null, win_rate: null, consecutive_losses: 0, status: "tidak aktif" },
+  },
+};
+let trainStart = null;
+const TRAIN_MS = 20_000;
+const TRAIN_STEPS = ["Mengunduh data candle", "Mencari parameter majors", "Uji walk-forward majors", "Mencari parameter alts", "Uji walk-forward alts", "Menyimpan model"];
+function modelObj() {
+  if (trainStart != null) {
+    const el = Date.now() - trainStart;
+    if (el >= TRAIN_MS) {
+      trainStart = null;
+      model.job = { state: "done", sleeve: null, progress: { done: 60, total: 60, label: "Selesai" }, started_at: model.job.started_at, finished_at: now(), error: null };
+      model.sleeves.majors.trained_at = model.sleeves.alts.trained_at = now();
+      model.next_training_at = now() + 24 * 3600;
+    } else {
+      const done = Math.floor((el / TRAIN_MS) * 60);
+      model.job.state = "running";
+      model.job.progress = { done, total: 60, label: TRAIN_STEPS[Math.min(TRAIN_STEPS.length - 1, Math.floor((el / TRAIN_MS) * TRAIN_STEPS.length))] };
+      model.job.sleeve = done < 30 ? "majors" : "alts";
+    }
+  }
+  return model;
+}
+function startTraining() {
+  if (trainStart == null) {
+    trainStart = Date.now();
+    model.job = { state: "running", sleeve: "majors", progress: { done: 0, total: 60, label: TRAIN_STEPS[0] }, started_at: now(), finished_at: null, error: null };
+  }
+  return modelObj();
+}
+
+const FAIL = [
+  ["listing baru (12 hr)", { age_days: 12 }], ["sudah naik 45% (24j)", { change_24h_pct: 45.2, ext_atr: 7.4 }],
+  ["spread 1.2%", {}], ["volume kecil", { volume_24h: 90_000_000 }], ["BTC melemah (alt diblok)", {}],
+  ["volatilitas terlalu rendah", { atr_pct: 0.22 }],
+];
+const MAJ = ["BTC", "ETH", "BNB", "SOL", "XRP", "DOGE", "ADA", "TRX", "LINK", "AVAX", "DOT", "LTC"];
+const ALT = ["PEPE", "WIF", "ARB", "INJ", "SUI", "TIA", "JUP", "ENA", "NEAR", "APT", "OP", "FET", "RNDR", "SEI", "STRK", "ONDO", "PYTH", "BONK", "FLOKI", "GALA", "AAVE", "UNI", "IMX", "TON"];
+let seed = 7;
+const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const radarPairs = [...MAJ.map((b) => [b, "majors"]), ...ALT.map((b) => [b, "alts"])].map(([base, category], i) => {
+  const maj = category === "majors";
+  const failIdx = !maj && i % 3 === 0 ? (i / 3) % FAIL.length : -1;
+  const vol = maj ? (0.3 + rnd() * 40) * 1e9 : (0.05 + rnd() * 3) * 1e9;
+  const price = maj ? Math.pow(10, 3 + rnd() * 5) : Math.pow(10, rnd() * 5);
+  const p = {
+    symbol: `${base}/IDR`, base, category, last: price, change_24h_pct: (rnd() - 0.45) * (maj ? 7 : 16),
+    volume_24h: vol, atr_pct: 0.5 + rnd() * (maj ? 1.5 : 3.5), rs_vs_btc: rnd() < 0.08 ? null : (rnd() - 0.5) * 8,
+    age_days: rnd() < 0.1 ? null : Math.round(maj ? 400 + rnd() * 2500 : 60 + rnd() * 700), vol_surge: 0.4 + rnd() * 2.8,
+    ext_atr: rnd() * 4, eligible: true, reason: "", updated_at: now() - Math.floor(rnd() * 240),
+  };
+  if (failIdx >= 0) { const [reason, patch] = FAIL[failIdx]; Object.assign(p, patch, { eligible: false, reason }); }
+  return p;
+});
+radarPairs.find((p) => p.base === "SEI").eligible = false;
+radarPairs.find((p) => p.base === "SEI").reason = "spread 1.2%";
+const radar = {
+  updated_at: now() - 95, sweeps_completed: 14, progress: { done: radarPairs.length, total: radarPairs.length },
+  regime: REGIME, pairs: radarPairs,
 };
 
 function limited(arr, q) {
@@ -284,6 +382,8 @@ const server = http.createServer(async (req, res) => {
       case "signals": return send(200, isRunning() ? limited(signals, q) : []);
       case "risk-events": return send(200, isRunning() ? limited(riskEvents, q) : []);
       case "audit": return send(200, isRunning() ? limited(audit, q) : []);
+      case "model": return send(200, modelObj());
+      case "radar": return send(200, { ...radar, updated_at: now() - 95 });
       case "config": return send(200, isRunning() ? config : {});
     }
   }
@@ -315,6 +415,7 @@ const server = http.createServer(async (req, res) => {
       if (!(body.telegram_bot_token || setupState.telegram_bot_token)) return send(200, { ok: false, error: "Isi bot token dulu" });
       return send(200, { ok: true });
     }
+    if (route === "model/train") return send(200, startTraining());
     if (!isRunning()) return send(409, { detail: "bot belum berjalan (mode setup)" });
     if (route === "pause") {
       state.status = "PAUSED"; state.reason = body.reason ?? "paused"; state.changed = now();

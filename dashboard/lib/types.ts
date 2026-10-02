@@ -17,6 +17,8 @@ export interface Status {
   day_pnl: number | null;
   universe: string[];
   server_time: number;
+  model?: { majors: string; alts: string };
+  regime?: Regime | null;
 }
 
 export interface Position {
@@ -38,6 +40,9 @@ export interface Position {
   exit_reason: string | null;
   last_price: number | null;
   unrealized_pnl: number | null;
+  sleeve?: "majors" | "alts" | null;
+  trailing?: 0 | 1 | boolean;
+  highest?: number | null;
 }
 
 export interface EquityPoint {
@@ -156,4 +161,89 @@ export interface Preflight {
   top: PreflightMarket[];
   sizing: PreflightSizing[];
   warnings: string[];
+  candidates_checked?: number;
+}
+
+export type SleeveStatus = "untrained" | "ok" | "no_edge" | "degraded";
+export interface Metrics {
+  trades: number;
+  win_rate: number;
+  profit_factor: number | null;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  avg_trade_pct: number;
+}
+export interface TimeframeResult {
+  timeframe: string;
+  params: Record<string, number>;
+  train: Metrics;
+  test: Metrics;
+  passed: boolean;
+}
+export interface SleeveModel {
+  status: SleeveStatus;
+  valid: boolean;
+  reason: string;
+  timeframe: string | null;
+  params: Record<string, number> | null;
+  symbols: string[];
+  trained_at: number | null;
+  train: Metrics | null;
+  test: Metrics | null;
+  per_timeframe: TimeframeResult[];
+}
+export interface LiveStats {
+  trades: number;
+  profit_factor: number | null;
+  win_rate: number | null;
+  consecutive_losses: number;
+  status: string;
+}
+export interface TrainingJob {
+  state: "idle" | "running" | "done" | "error";
+  sleeve: string | null;
+  progress: { done: number; total: number; label: string };
+  started_at: number | null;
+  finished_at: number | null;
+  error: string | null;
+}
+export interface ModelInfo {
+  learning_enabled: boolean;
+  require_validated_edge: boolean;
+  sleeves: { majors: SleeveModel; alts: SleeveModel };
+  job: TrainingJob;
+  next_training_at: number | null;
+  live: { majors: LiveStats; alts: LiveStats };
+}
+
+export interface Regime {
+  btc_symbol: string;
+  btc_change_24h_pct: number | null;
+  btc_below_ema50: boolean;
+  alts_blocked: boolean;
+  all_blocked: boolean;
+  reason: string;
+}
+export interface RadarPair {
+  symbol: string;
+  base: string;
+  category: "majors" | "alts";
+  last: number;
+  change_24h_pct: number;
+  volume_24h: number;
+  atr_pct: number;
+  rs_vs_btc: number | null;
+  age_days: number | null;
+  vol_surge: number;
+  ext_atr: number | null;
+  eligible: boolean;
+  reason: string;
+  updated_at: number;
+}
+export interface RadarInfo {
+  updated_at: number | null;
+  sweeps_completed: number;
+  progress: { done: number; total: number };
+  regime: Regime;
+  pairs: RadarPair[];
 }

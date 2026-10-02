@@ -62,6 +62,12 @@ class PaperExchange(ExchangeClient):
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         return self.data.amount_to_precision(symbol, amount)
 
+    def set_volume_hint(self, symbol: str, quote_volume_24h: float) -> None:
+        self.data.set_volume_hint(symbol, quote_volume_24h)
+
+    async def fetch_ask_depth(self, symbol: str, range_pct: float) -> float:
+        return await self.data.fetch_ask_depth(symbol, range_pct)
+
     def price_to_precision(self, symbol: str, price: float) -> float:
         return self.data.price_to_precision(symbol, price)
 
@@ -187,6 +193,8 @@ class StaticMarketData(MarketData):
         self.markets = markets or {}
         self.tickers: dict[str, Ticker] = {}
         self.candles: dict[str, list[Candle]] = {}
+        self.depth: dict[str, float] = {}
+        self.ohlcv_calls = 0
 
     def set_price(self, symbol: str, last: float, spread_pct: float = 0.1, quote_volume: float = 5_000_000) -> None:
         half = last * spread_pct / 200
@@ -202,5 +210,13 @@ class StaticMarketData(MarketData):
         return self.tickers[symbol]
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int, since: int | None = None) -> list[Candle]:
-        return self.candles.get(symbol, [])[-limit:]
+        self.ohlcv_calls += 1
+        data = self.candles.get(symbol, [])
+        if since is not None:
+            data = [c for c in data if c.ts >= since]
+            return data[:limit]
+        return data[-limit:]
+
+    async def fetch_ask_depth(self, symbol: str, range_pct: float) -> float:
+        return self.depth.get(symbol, float("inf"))
 

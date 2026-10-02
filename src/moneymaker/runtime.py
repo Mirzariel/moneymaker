@@ -37,8 +37,10 @@ def build_exchange(secrets: Secrets, cfg: BotConfig) -> ExchangeClient:
     if secrets.live_trading:
         if not (secrets.toko_api_key and secrets.toko_api_secret):
             raise RuntimeError("LIVE_TRADING=true but TOKO_API_KEY / TOKO_API_SECRET are missing")
-        return TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,))
-    return PaperExchange(TokocryptoClient(native_quotes=(cfg.quote,)), quote=cfg.quote,
+        return TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,),
+                                rate_limit_ms=cfg.exchange_rate_limit_ms)
+    return PaperExchange(TokocryptoClient(native_quotes=(cfg.quote,), rate_limit_ms=cfg.exchange_rate_limit_ms),
+                         quote=cfg.quote,
                          starting_quote=cfg.paper.starting_quote_balance, buy_fee_pct=cfg.fees.buy_pct,
                          sell_fee_pct=cfg.fees.sell_pct, slippage_pct=cfg.paper.slippage_pct,
                          state_path=secrets.paper_state_path)

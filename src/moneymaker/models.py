@@ -90,6 +90,11 @@ class Signal:
     expires_at: float
     reason: str
     candle_ts: int = 0
+    sleeve: str = "majors"       # majors | alts
+    trailing: bool = False       # exit by trailing stop instead of a fixed take-profit
+    trail_mult: float = 0.0
+    atr: float = 0.0
+    timeframe: str = ""
 
 
 @dataclass
@@ -105,3 +110,9 @@ class Position:
     opened_at: float
     status: str = "open"
     fees: float = 0.0
+    sleeve: str = "majors"
+    trailing: bool = False
+    trail_mult: float = 0.0
+    atr: float = 0.0
+    highest: float = 0.0
+    timeframe: str = ""

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..config import FeeConfig, RiskConfig
+from ..config import FeeConfig, RiskConfig, SleeveConfig
 from ..models import BotStatus, Market, Signal, Ticker
 
 
@@ -21,6 +21,8 @@ class RiskContext:
     ticker: Ticker | None = None
     market: Market | None = None
     last_entry_ts: float | None = None
+    sleeve: SleeveConfig | None = None   # per-sleeve budget (majors / alts)
+    sleeve_open: int = 0                  # open positions in that sleeve
 
 
 @dataclass
@@ -71,6 +73,8 @@ class RiskEngine:
             return Decision.reject("already_in_position", sig.symbol)
         if len(ctx.open_symbols) >= c.max_open_positions:
             return Decision.reject("max_open_positions", f"{len(ctx.open_symbols)} >= {c.max_open_positions}")
+        if ctx.sleeve is not None and ctx.sleeve_open >= ctx.sleeve.max_positions:
+            return Decision.reject("sleeve_max_positions", f"{sig.sleeve}: {ctx.sleeve_open} >= {ctx.sleeve.max_positions}")
         if self.daily_loss_breached(ctx):
             return Decision.reject("max_daily_loss", f"day pnl {ctx.day_pnl:.2f}")
         if ctx.consecutive_losses >= c.max_consecutive_losses:
@@ -106,12 +110,15 @@ class RiskEngine:
         # ---- sizing: lose at most risk_per_trade_pct of equity if the stop fills at its limit, after fees
         notes: list[str] = []
         loss_frac = (price - sig.stop) / price + c.stop_limit_offset_pct / 100 + round_trip_fee
-        cost = ctx.equity * c.risk_per_trade_pct / 100 / loss_frac
+        risk_pct = ctx.sleeve.risk_per_trade_pct if ctx.sleeve is not None else c.risk_per_trade_pct
+        cost = ctx.equity * risk_pct / 100 / loss_frac
         caps = {
             "max_position_pct": ctx.equity * c.max_position_pct / 100,
             "max_exposure_pct": ctx.equity * c.max_exposure_pct / 100 - ctx.exposure,
             "quote_free": ctx.quote_free * (1 - c.quote_buffer_pct / 100),
         }
+        if ctx.sleeve is not None and ctx.sleeve.max_position_quote:
+            caps["sleeve_max_position"] = ctx.sleeve.max_position_quote
         for name, cap in caps.items():
             if cost > cap:
                 notes.append(f"resized by {name}: {cost:.2f} -> {max(cap, 0):.2f}")

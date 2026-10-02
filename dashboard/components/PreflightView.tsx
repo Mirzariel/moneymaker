@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
-import type { Preflight, PreflightMarket, PreflightSizing } from "@/lib/types";
+import type { ModelInfo, Preflight, PreflightMarket, PreflightSizing } from "@/lib/types";
 import { fmtCompactMoney, fmtMoney, fmtNum } from "@/lib/format";
 import { DataTable, type Column } from "@/components/DataTable";
 
@@ -22,6 +22,14 @@ export function PreflightView({
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+
+  const [model, setModel] = useState<ModelInfo | null>(null);
+  useEffect(() => {
+    api<ModelInfo>("model")
+      .then(setModel)
+      .catch(() => setModel(null));
+  }, []);
+  const noEdge = model != null && !model.sleeves.majors.valid && !model.sleeves.alts.valid;
 
   const run = async () => {
     setLoading(true);
@@ -164,6 +172,12 @@ export function PreflightView({
             <dd className={data.binance_reachable ? "pos strong" : "neg strong"}>{data.binance_reachable ? "ya" : "tidak"}</dd>
             <dt>Market bisa ditrade</dt>
             <dd>{data.markets_active}</dd>
+            {data.candidates_checked != null && (
+              <>
+                <dt>Dicek</dt>
+                <dd>Dicek: {data.candidates_checked} koin</dd>
+              </>
+            )}
           </dl>
         </section>
       )}
@@ -186,6 +200,12 @@ export function PreflightView({
         <button type="button" className="btn-primary btn-big" onClick={start} disabled={starting || !data?.ok}>
           {starting ? "Memulai…" : "Mulai trading"}
         </button>
+        {noEdge && (
+          <p className="note note-warn">
+            Model belum punya keunggulan tervalidasi — setelah mulai, bot akan diam sampai model lolos uji (lihat tab
+            Model).
+          </p>
+        )}
         {!data?.ok && <p className="help">Jalankan cek kesiapan dulu sebelum mulai trading.</p>}
         {startError && (
           <p className="inline-error" role="alert">

@@ -78,11 +78,12 @@ def test_backtest_runs_net_of_fees():
     cfg = make_cfg()
     r = backtest(SYM, _series(), cfg)
     assert len(r.trades) > 0
-    assert r.fees_paid > 0
-    assert r.end_equity == pytest.approx(r.start_equity + sum(t.pnl for t in r.trades), rel=1e-9)
-    assert 0 <= r.max_drawdown_pct < 100
     for t in r.trades:
         assert t.exit_ts >= t.entry_ts
+        gross = t.exit / t.entry - 1
+        assert t.ret < gross  # fees always reduce the result
+    assert r.metrics.trades == len(r.trades)
+    assert 0 <= r.metrics.max_drawdown_pct < 100
 
 
 def test_backtest_higher_fees_never_help():
@@ -91,4 +92,6 @@ def test_backtest_higher_fees_never_help():
     pricey.risk.min_edge_fee_multiple = 0  # same trades, only fees differ
     cheap.risk.min_edge_fee_multiple = 0
     a, b = backtest(SYM, _series(), cheap), backtest(SYM, _series(), pricey)
-    assert b.end_equity < a.end_equity
+    assert len(a.trades) == len(b.trades) > 0
+    assert b.metrics.total_return_pct < a.metrics.total_return_pct
+    assert all(tb.ret < ta.ret for ta, tb in zip(a.trades, b.trades))

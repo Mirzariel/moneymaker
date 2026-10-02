@@ -44,7 +44,15 @@ export function EquityChart({ points, quote }: { points: EquityPoint[] | null; q
     const sx = (t: number) => (maxX === minX ? PAD.l + innerW / 2 : PAD.l + ((t - minX) / (maxX - minX)) * innerW);
     const sy = (v: number) => PAD.t + (1 - (v - yLo) / (yHi - yLo)) * innerH;
 
-    const line = pts.map((p, i) => `${i ? "L" : "M"}${sx(p.ts).toFixed(1)} ${sy(p.equity).toFixed(1)}`).join(" ");
+    const xy = pts.map((p) => [sx(p.ts), sy(p.equity)] as const);
+    let line = `M${xy[0][0].toFixed(1)} ${xy[0][1].toFixed(1)}`;
+    for (let i = 1; i < xy.length; i++) {
+      const [x0, y0] = xy[i - 1];
+      const [x1, y1] = xy[i];
+      const cx = (x0 + x1) / 2;
+      // kontrol horizontal -> kurva halus tanpa overshoot vertikal
+      line += ` C${cx.toFixed(1)} ${y0.toFixed(1)} ${cx.toFixed(1)} ${y1.toFixed(1)} ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+    }
     const area = `${line} L${sx(maxX).toFixed(1)} ${PAD.t + innerH} L${sx(minX).toFixed(1)} ${PAD.t + innerH} Z`;
     const iMin = ys.indexOf(minY);
     const iMax = ys.indexOf(maxY);
@@ -79,6 +87,12 @@ export function EquityChart({ points, quote }: { points: EquityPoint[] | null; q
         onPointerLeave={() => setHover(null)}
         className="chart"
       >
+        <defs>
+          <linearGradient id="eqgrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.38" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
         <line x1={PAD.l} x2={w - PAD.r} y1={PAD.t + innerH} y2={PAD.t + innerH} className="axis" />
         <line x1={PAD.l} x2={w - PAD.r} y1={sy(maxY)} y2={sy(maxY)} className="grid" />
         {maxY !== minY && <line x1={PAD.l} x2={w - PAD.r} y1={sy(minY)} y2={sy(minY)} className="grid" />}

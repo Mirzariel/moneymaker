@@ -152,6 +152,32 @@ async def offline_control(secrets: Secrets, cfg: BotConfig, action: str) -> dict
         store.close()
 
 
+async def train_cli(secrets: Secrets, cfg: BotConfig) -> None:
+    """Run radar + training once and print the model (does not trade)."""
+    from .runtime import build_exchange
+    store = Store(secrets.database_path)
+    ex = build_exchange(secrets, cfg)
+    engine = Engine(ex, store, Notifier(), cfg)
+    try:
+        await engine.refresh_markets()
+        print("Sweeping the market (about 1 request / 2 s)…")
+        await engine.sweeper.sweep_once()
+        print(f"radar: {len(engine.sweeper.stats)} pairs, {len(engine.sweeper.eligible('alts'))} alts eligible; "
+              f"{(engine.sweeper.regime or {}).get('reason')}")
+        sleeves = tuple(s for s in ("majors", "alts") if getattr(cfg.sleeves, s).enabled)
+        await engine.trainer.train(sleeves)
+        for name, m in engine.model.load().items():
+            print(f"\n[{name}] {m['status']}: {m['reason']}")
+            if m["params"]:
+                print(f"  timeframe {m['timeframe']} params {m['params']}")
+                print(f"  train {m['train']}\n  test  {m['test']}")
+        if engine.trainer.job["error"]:
+            print("ERROR:", engine.trainer.job["error"])
+    finally:
+        await ex.close()
+        store.close()
+
+
 def cli() -> None:
     p = argparse.ArgumentParser(prog="moneymaker")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -163,6 +189,7 @@ def cli() -> None:
     sub.add_parser("panic")
     ck = sub.add_parser("check")
     ck.add_argument("--test-orders", metavar="SYMBOL", help="place+cancel a tiny far-away limit buy and stop sell")
+    sub.add_parser("train", help="sweep the market and train the model now (uses .env / config.yaml)")
     bt = sub.add_parser("backtest")
     bt.add_argument("symbols", nargs="+")
     bt.add_argument("--days", type=int, default=180)
@@ -197,6 +224,8 @@ def cli() -> None:
     elif args.cmd == "check":
         from .check import run_check
         asyncio.run(run_check(secrets, cfg, args.test_orders))
+    elif args.cmd == "train":
+        asyncio.run(train_cli(secrets, cfg))
     elif args.cmd == "backtest":
         from .backtest.runner import run_backtest_cli
         asyncio.run(run_backtest_cli(cfg, args.symbols, args.days))

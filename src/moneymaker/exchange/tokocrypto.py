@@ -51,8 +51,11 @@ class TokocryptoClient(ExchangeClient):
     """Thin wrapper: retries read-only calls; never retries order placement (reconcile handles that)."""
 
     def __init__(self, api_key: str = "", secret: str = "", read_retries: int = 3,
-                 native_quotes: tuple[str, ...] = ("IDR",)):
-        self.ex = ccxt.tokocrypto({"apiKey": api_key, "secret": secret, "enableRateLimit": True})
+                 native_quotes: tuple[str, ...] = ("IDR",), rate_limit_ms: int | None = None):
+        opts: dict = {"apiKey": api_key, "secret": secret, "enableRateLimit": True}
+        if rate_limit_ms:
+            opts["rateLimit"] = rate_limit_ms
+        self.ex = ccxt.tokocrypto(opts)
         self.read_retries = read_retries
         self.native_quotes = native_quotes
         self._markets: dict[str, Market] = {}
@@ -97,53 +100,44 @@ class TokocryptoClient(ExchangeClient):
         return out
 
     async def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, Ticker]:
+        """Tickers for `symbols`, one cheap request each (CCXT spaces requests ~2 s apart on Tokocrypto).
+
+        Never uses the bulk 24h-ticker call: it costs 40x (= 80 s of rate-limit wait) and can't see native
+        markets anyway. `symbols=None` means every active market in `native_quotes` (slow; avoid).
+        """
         if not self._markets:
             await self.load_markets()
+        if symbols is None:
+            symbols = [s for s, m in self._markets.items() if m.active and m.quote in self.native_quotes]
         out: dict[str, Ticker] = {}
-        binance_error: Exception | None = None
-        want = None if symbols is None else set(symbols)
-        if want is None or any(s in self._markets and not self._markets[s].native for s in want):
-            # Binance-backed (type 1) markets: one call to api.binance.com returns all of them.
-            # That host may be blocked by Indonesian ISPs, so a failure here must not hide native markets.
+        errors: list[Exception] = []
+        for sym in symbols:
             try:
-                raw = await self._read(lambda: self.ex.fetch_tickers())
-            except Exception as e:  # noqa: BLE001
-                log.warning("binance-backed tickers unavailable: %s", e)
-                binance_error = e
-                raw = {}
-            for sym, t in raw.items():
-                if want is None or sym in want:
-                    out[sym] = Ticker(symbol=sym, bid=_f(t.get("bid")), ask=_f(t.get("ask")), last=_f(t.get("last")),
-                                      quote_volume=_f(t.get("quoteVolume")))
-        # Native markets (e.g. IDR pairs) have no ticker endpoint: build one per market.
-        native = [s for s, m in self._markets.items() if m.native and m.active
-                  and (s in want if want is not None else m.quote in self.native_quotes)]
-        sem = asyncio.Semaphore(4)
-
-        async def one(sym: str) -> None:
-            async with sem:
-                try:
-                    out[sym] = await self._native_ticker(sym)
-                except Exception as e:  # noqa: BLE001 - one bad market must not hide the rest
-                    log.warning("native ticker %s failed: %s", sym, e)
-
-        await asyncio.gather(*(one(s) for s in native))
-        if not out and binance_error is not None:
-            raise binance_error
+                out[sym] = await self.fetch_ticker(sym)
+            except Exception as e:  # noqa: BLE001 - one bad market must not hide the rest
+                log.warning("ticker %s failed: %s", sym, e)
+                errors.append(e)
+        if not out and errors:
+            raise errors[0]
         return out
+
+    def set_volume_hint(self, symbol: str, quote_volume_24h: float) -> None:
+        """The market radar already knows 24h volume; reuse it instead of an extra klines request."""
+        self._volume_cache[symbol] = (time.time(), quote_volume_24h)
+
+    async def _volume_24h(self, symbol: str) -> float:
+        cached = self._volume_cache.get(symbol)
+        if cached is None or time.time() - cached[0] > 7200:
+            candles = await self.fetch_ohlcv(symbol, "1h", 25)
+            self._volume_cache[symbol] = (time.time(), sum(c.volume * c.close for c in candles[-24:]))
+        return self._volume_cache[symbol][1]
 
     async def _native_ticker(self, symbol: str) -> Ticker:
         ob = await self._read(lambda: self.ex.fetch_order_book(symbol, 5))
         bid = _f(ob["bids"][0][0]) if ob.get("bids") else 0.0
         ask = _f(ob["asks"][0][0]) if ob.get("asks") else 0.0
-        cached = self._volume_cache.get(symbol)
-        if cached is None or time.time() - cached[0] > 900:
-            candles = await self.fetch_ohlcv(symbol, "1h", 25)
-            volume = sum(c.volume * c.close for c in candles[-24:])
-            self._volume_cache[symbol] = (time.time(), volume)
-        volume = self._volume_cache[symbol][1]
         last = (bid + ask) / 2 if bid > 0 and ask > 0 else (bid or ask)
-        return Ticker(symbol=symbol, bid=bid, ask=ask, last=last, quote_volume=volume)
+        return Ticker(symbol=symbol, bid=bid, ask=ask, last=last, quote_volume=await self._volume_24h(symbol))
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         if not self._markets:
@@ -154,6 +148,23 @@ class TokocryptoClient(ExchangeClient):
         t = await self._read(lambda: self.ex.fetch_ticker(symbol))
         return Ticker(symbol=symbol, bid=_f(t.get("bid")), ask=_f(t.get("ask")), last=_f(t.get("last")),
                       quote_volume=_f(t.get("quoteVolume")))
+
+    async def fetch_ask_depth(self, symbol: str, range_pct: float) -> float:
+        """Quote value of asks within `range_pct` above the best ask (how much we could buy without moving price)."""
+        ob = await self._read(lambda: self.ex.fetch_order_book(symbol, 20))
+        asks = ob.get("asks") or []
+        if not asks:
+            return 0.0
+        limit = _f(asks[0][0]) * (1 + range_pct / 100)
+        return sum(_f(p) * _f(q) for p, q, *_ in asks if _f(p) <= limit)
+
+    async def ping_binance(self) -> bool:
+        """Is api.binance.com (data host for Tokocrypto's Binance-backed markets) reachable? Costs 1 request."""
+        try:
+            await self.ex.binanceGetPing()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     async def fetch_ohlcv(self, symbol: str, timeframe: str, limit: int, since: int | None = None) -> list[Candle]:
         raw = await self._read(lambda: self.ex.fetch_ohlcv(symbol, timeframe, since=since, limit=limit))

@@ -101,6 +101,16 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after v0.2 to existing databases."""
+        cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(positions)").fetchall()}
+        for name, ddl in [("sleeve", "TEXT NOT NULL DEFAULT 'majors'"), ("trailing", "INTEGER NOT NULL DEFAULT 0"),
+                          ("trail_mult", "REAL NOT NULL DEFAULT 0"), ("atr", "REAL NOT NULL DEFAULT 0"),
+                          ("highest", "REAL"), ("timeframe", "TEXT NOT NULL DEFAULT ''")]:
+            if name not in cols:
+                self.conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {ddl}")
 
     def close(self) -> None:
         self.conn.close()
@@ -176,13 +186,22 @@ class Store:
 
     # ---- positions ---------------------------------------------------------------
     def open_position(self, *, symbol: str, amount: float, entry_price: float, cost: float, stop_price: float,
-                      take_profit: float, fees: float) -> int:
+                      take_profit: float, fees: float, sleeve: str = "majors", trailing: bool = False,
+                      trail_mult: float = 0.0, atr: float = 0.0, timeframe: str = "") -> int:
         cur = self.conn.execute(
-            "INSERT INTO positions(symbol, status, amount, entry_price, cost, stop_price, take_profit, opened_at, fees)"
-            " VALUES(?, 'open', ?, ?, ?, ?, ?, ?, ?)",
-            (symbol, amount, entry_price, cost, stop_price, take_profit, time.time(), fees),
+            "INSERT INTO positions(symbol, status, amount, entry_price, cost, stop_price, take_profit, opened_at, fees,"
+            " sleeve, trailing, trail_mult, atr, highest, timeframe) VALUES(?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (symbol, amount, entry_price, cost, stop_price, take_profit, time.time(), fees, sleeve, int(trailing),
+             trail_mult, atr, entry_price, timeframe),
         )
         return int(cur.lastrowid)
+
+    def set_position_highest(self, position_id: int, highest: float) -> None:
+        self.conn.execute("UPDATE positions SET highest=? WHERE id=?", (highest, position_id))
+
+    def closed_positions(self, sleeve: str, since: float, limit: int) -> list[dict]:
+        return self.rows("SELECT * FROM positions WHERE status='closed' AND sleeve=? AND closed_at>=? "
+                         "ORDER BY closed_at DESC LIMIT ?", (sleeve, since, limit))
 
     def set_position_stop(self, position_id: int, stop_order_id: str | None, stop_price: float | None = None) -> None:
         if stop_price is None:
@@ -207,7 +226,9 @@ class Store:
         return [
             Position(id=r["id"], symbol=r["symbol"], amount=r["amount"], entry_price=r["entry_price"], cost=r["cost"],
                      stop_price=r["stop_price"], take_profit=r["take_profit"], stop_order_id=r["stop_order_id"],
-                     opened_at=r["opened_at"], status=r["status"], fees=r["fees"])
+                     opened_at=r["opened_at"], status=r["status"], fees=r["fees"], sleeve=r["sleeve"],
+                     trailing=bool(r["trailing"]), trail_mult=r["trail_mult"], atr=r["atr"],
+                     highest=r["highest"] or r["entry_price"], timeframe=r["timeframe"])
             for r in rows
         ]
 

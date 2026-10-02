@@ -9,14 +9,50 @@ timezone: Asia/Jakarta   # "hari ini" untuk batas rugi harian
 panic_scope: bot_positions   # all_non_quote = panic juga menjual koin yang tidak dibeli bot
 
 scanner:
-  min_quote_volume_24h: 500000000   # Rp500 juta/hari. Turunkan kalau `check` bilang tidak ada yang tradeable
+  min_quote_volume_24h: 500000000   # koin terkenal: Rp500 juta/hari minimal
   max_spread_pct: 0.5
-  max_symbols: 10
-  refresh_minutes: 30
   whitelist: []                      # mis. ["BTC/IDR", "ETH/IDR"] untuk membatasi pair
   blacklist: []
+  # Koin terkenal (kantong "majors"); semua pair IDR lain dipindai radar sebagai kantong "alts".
+  major_bases: [BTC, ETH, BNB, SOL, XRP, DOGE, ADA, TRX, LINK, AVAX, DOT, LTC, TON, SUI, BCH, NEAR]
+  sweep_interval_minutes: 15         # radar memindai ulang semua pair tiap 15 menit
+  alt_candidates: 10                 # berapa alt terkuat yang dicek sinyalnya
 
-strategy:
+# Dua "kantong" dengan budget terpisah.
+sleeves:
+  majors: {enabled: true, max_positions: 1, risk_per_trade_pct: 2.0}
+  alts:   {enabled: true, max_positions: 1, risk_per_trade_pct: 1.0, max_position_quote: 30000}
+
+# Filter koin kecil (pengalaman umum pasar crypto)
+alt_filters:
+  min_volume_24h: 300000000          # Rp300 juta/hari
+  max_spread_pct: 0.6
+  min_age_days: 30                   # listing baru sering dijual habis
+  max_change_24h_pct: 30             # jangan kejar yang sudah terbang
+  max_extension_atr: 3.0
+  min_depth_multiple: 5.0            # order book harus 5x lebih tebal dari order kita
+  depth_range_pct: 1.0
+
+regime:                              # BTC menentukan arah pasar
+  alt_block_btc_change_24h_pct: -3.0 # BTC < -3% 24j dan di bawah EMA50 -> alt tidak entry
+  extreme_move_atr: 2.5              # candle BTC > 2,5x ATR -> semua entry ditahan
+
+# Bot belajar dari riwayat harga: parameter dipilih dari 70% data awal, diuji di 30% terakhir.
+# Kantong hanya boleh trade kalau lolos uji; dijeda otomatis kalau performa live memburuk.
+learning:
+  enabled: true
+  require_validated_edge: true
+  relearn_days: 7
+  history_days: 120
+  majors_min_pf: 1.15
+  alts_min_pf: 1.3
+  min_test_trades: 8
+  max_test_drawdown_pct: 15
+
+# Tokocrypto lewat CCXT: ±1 request per 2 detik. Biarkan null (aman) kecuali tahu batas akunmu.
+exchange_rate_limit_ms: null
+
+strategy:                # nilai awal kantong majors (model mengganti saat lolos uji)
   name: trend_atr
   ema_fast: 20
   ema_slow: 50
@@ -27,7 +63,7 @@ strategy:
   signal_ttl_sec: 300
 
 risk:
-  risk_per_trade_pct: 2.0        # rugi maks ±Rp2.000 per trade kalau stop kena (termasuk fee)
+  risk_per_trade_pct: 2.0        # default; per kantong diatur di `sleeves`
   max_position_pct: 50.0         # maks ±Rp50.000 per posisi
   max_open_positions: 2
   max_exposure_pct: 90.0

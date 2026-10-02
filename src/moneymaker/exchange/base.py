@@ -30,6 +30,13 @@ class MarketData(ABC):
     def price_to_precision(self, symbol: str, price: float) -> float:
         return float(f"{price:.8g}")
 
+    def set_volume_hint(self, symbol: str, quote_volume_24h: float) -> None:  # pragma: no cover - optional
+        return None
+
+    async def fetch_ask_depth(self, symbol: str, range_pct: float) -> float:
+        """Quote value of asks within range_pct of the best ask. Default: unknown = unlimited."""
+        return float("inf")
+
     async def close(self) -> None:  # pragma: no cover - default no-op
         return None
 

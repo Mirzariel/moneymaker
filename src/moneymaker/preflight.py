@@ -1,6 +1,11 @@
-"""Readiness check shared by `moneymaker check` (CLI) and the setup page (/api/preflight)."""
+"""Readiness check shared by `moneymaker check` (CLI) and the setup page (/api/preflight).
+
+Budget-aware: Tokocrypto via CCXT allows ~1 request / 2 s, so we only check the well-known coins
+(one ticker each = order book + 24h volume) and stop at a hard deadline instead of hanging.
+"""
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -8,18 +13,27 @@ from .config import BotConfig, Secrets
 from .exchange.tokocrypto import TokocryptoClient
 from .models import BotStatus, Signal
 from .risk.engine import RiskContext, RiskEngine
+from .scanner import candidate_symbols, category, static_exclusion
+
+log = logging.getLogger(__name__)
+DEADLINE_S = 150.0
 
 
-async def run_preflight(secrets: Secrets, cfg: BotConfig, ex: TokocryptoClient | None = None) -> dict[str, Any]:
+async def run_preflight(secrets: Secrets, cfg: BotConfig, ex: TokocryptoClient | None = None,
+                        deadline_s: float = DEADLINE_S) -> dict[str, Any]:
     own = ex is None
-    ex = ex or TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,))
+    ex = ex or TokocryptoClient(secrets.toko_api_key, secrets.toko_api_secret, native_quotes=(cfg.quote,),
+                                rate_limit_ms=cfg.exchange_rate_limit_ms)
+    t0 = time.monotonic()
     res: dict[str, Any] = {
         "ok": False, "error": None, "quote": cfg.quote, "binance_reachable": False, "markets_active": 0,
         "markets_per_quote": {}, "fees": {"buy_pct": cfg.fees.buy_pct, "sell_pct": cfg.fees.sell_pct},
         "equity": cfg.paper.starting_quote_balance, "equity_source": "config", "balances": {},
-        "top": [], "sizing": [], "warnings": [],
+        "top": [], "sizing": [], "warnings": [], "candidates_checked": 0, "tradeable_count": 0,
+        "alts_available": 0,
     }
     try:
+        log.info("preflight: loading markets")
         markets = await ex.load_markets()
         active = [m for m in markets.values() if m.active]
         res["markets_active"] = len(active)
@@ -27,36 +41,44 @@ async def run_preflight(secrets: Secrets, cfg: BotConfig, ex: TokocryptoClient |
         for m in active:
             per_quote[m.quote] = per_quote.get(m.quote, 0) + 1
         res["markets_per_quote"] = dict(sorted(per_quote.items(), key=lambda x: -x[1])[:8])
-        try:
-            await ex.ex.fetch_tickers()
-            res["binance_reachable"] = True
-        except Exception:  # noqa: BLE001
-            res["warnings"].append("api.binance.com tidak bisa diakses dari internetmu: hanya market native "
-                                   "(mis. pair IDR) yang punya data.")
+        res["alts_available"] = sum(1 for m in active if static_exclusion(m, cfg) is None
+                                    and category(m, cfg) == "alts")
+        res["binance_reachable"] = await ex.ping_binance()
 
-        tickers = await ex.fetch_tickers()
-        rows = sorted(((t.quote_volume, s, t) for s, t in tickers.items()
-                       if s in markets and markets[s].quote == cfg.quote and markets[s].active),
-                      key=lambda r: r[0], reverse=True)
+        cands = candidate_symbols(markets, cfg)
+        if not cands:
+            res["warnings"].append(f"Tidak ada koin terkenal dengan pair {cfg.quote} yang bisa ditrade.")
+        rows = []
+        for k, sym in enumerate(cands):
+            if time.monotonic() - t0 > deadline_s - 20:
+                res["warnings"].append(f"Waktu cek habis: baru {k} dari {len(cands)} koin dicek "
+                                       f"(Tokocrypto membatasi ±1 request per 2 detik).")
+                break
+            log.info("preflight %d/%d %s", k + 1, len(cands), sym)
+            try:
+                t = await ex.fetch_ticker(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("preflight %s failed: %s", sym, e)
+                continue
+            rows.append((sym, t))
+        res["candidates_checked"] = len(rows)
+        if cands and not rows:
+            raise RuntimeError("Data harga tidak bisa diambil dari Tokocrypto (cek internet / coba lagi).")
 
-        def tradeable(s: str, t) -> bool:
-            m = markets[s]
-            return (t.quote_volume >= cfg.scanner.min_quote_volume_24h and t.spread_pct <= cfg.scanner.max_spread_pct
-                    and (m.supports_stop_limit or cfg.risk.allow_bot_side_stop)
-                    and m.base not in cfg.scanner.exclude_bases)
+        def tradeable(sym: str, t) -> bool:
+            return t.quote_volume >= cfg.scanner.min_quote_volume_24h and t.spread_pct <= cfg.scanner.max_spread_pct
 
-        for vol, s, t in rows[:25]:
-            m = markets[s]
-            res["top"].append({"symbol": s, "quote_volume": vol, "spread_pct": round(t.spread_pct, 4),
-                               "native": m.native, "stop_limit": m.supports_stop_limit,
-                               "min_cost": m.min_cost, "tradeable": tradeable(s, t)})
-        ok_rows = [(s, t) for _, s, t in rows if tradeable(s, t)]
+        rows.sort(key=lambda r: r[1].quote_volume, reverse=True)
+        for sym, t in rows:
+            m = markets[sym]
+            res["top"].append({"symbol": sym, "quote_volume": t.quote_volume, "spread_pct": round(t.spread_pct, 4),
+                               "native": m.native, "stop_limit": m.supports_stop_limit, "min_cost": m.min_cost,
+                               "tradeable": tradeable(sym, t)})
+        ok_rows = [(s, t) for s, t in rows if tradeable(s, t)]
         res["tradeable_count"] = len(ok_rows)
-        if not rows:
-            res["warnings"].append(f"Tidak ada market {cfg.quote} yang datanya terbaca.")
-        elif not ok_rows:
-            res["warnings"].append("Tidak ada market yang lolos filter. Turunkan scanner.min_quote_volume_24h "
-                                   "atau naikkan scanner.max_spread_pct di config.yaml.")
+        if rows and not ok_rows:
+            res["warnings"].append("Tidak ada koin terkenal yang lolos filter volume/spread. Turunkan "
+                                   "scanner.min_quote_volume_24h atau naikkan scanner.max_spread_pct.")
         if any(not markets[s].supports_stop_limit for s, _ in ok_rows):
             res["warnings"].append("Sebagian market tidak menerima stop-loss di exchange: stop dijaga bot, "
                                    "jadi laptop harus tetap menyala selama ada posisi.")
@@ -78,11 +100,12 @@ async def run_preflight(secrets: Secrets, cfg: BotConfig, ex: TokocryptoClient |
     finally:
         if own:
             await ex.close()
+    log.info("preflight finished in %.0fs (ok=%s)", time.monotonic() - t0, res["ok"])
     return res
 
 
 def sizing_preview(cfg: BotConfig, equity: float, items) -> list[dict[str, Any]]:
-    """What the risk engine would do with a typical signal (stop 3% below, target 6% above)."""
+    """What the risk engine would do with a typical majors signal (stop 3% below, target 6% above)."""
     risk = RiskEngine(cfg.risk, cfg.fees, cfg.scanner.min_quote_volume_24h, cfg.scanner.max_spread_pct)
     now = time.time()
     out = []
@@ -90,7 +113,7 @@ def sizing_preview(cfg: BotConfig, equity: float, items) -> list[dict[str, Any]]
         sig = Signal(sym, "buy", t.ask, t.ask * 0.97, t.ask * 1.06, now, now + 60, "preview")
         ctx = RiskContext(now=now, status=BotStatus.RUNNING, equity=equity, quote_free=equity, exposure=0.0,
                           open_symbols=set(), day_start_equity=equity, day_pnl=0.0, consecutive_losses=0,
-                          ticker=t, market=m, last_entry_ts=None)
+                          ticker=t, market=m, last_entry_ts=None, sleeve=cfg.sleeves.majors)
         d = risk.evaluate(sig, ctx)
         out.append({"symbol": sym, "approved": d.approved, "cost": d.cost, "rule": d.rule, "detail": d.detail,
                     "notes": d.notes})

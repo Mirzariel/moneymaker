@@ -39,7 +39,9 @@ class ControlService:
             "quote_free": last_eq[0]["quote_free"] if last_eq else None,
             "exposure": last_eq[0]["exposure"] if last_eq else None,
             "day_pnl": self.engine.last_day_pnl,
-            "universe": sorted(self.engine.universe),
+            "universe": self.engine.universe,
+            "model": {k: v["status"] for k, v in self.engine.model.load().items()},
+            "regime": self.engine.sweeper.regime,
             "server_time": time.time(),
         }
 

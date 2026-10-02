@@ -325,10 +325,11 @@ export function SetupForm({
         )}
       </section>
 
-      <section className="card step">
-        <h2>
-          <span className="step-n">2</span> Telegram <span className="tag">opsional, disarankan</span>
-        </h2>
+      <details className="card step optional">
+        <summary>Notifikasi (opsional, bisa nanti)</summary>
+        <p className="note note-neutral">Bot tetap jalan tanpa ini — semua bisa dipantau dari dashboard.</p>
+      <section className="sub">
+        <h3>Telegram</h3>
         <p className="help">
           Buat bot di <strong>@BotFather</strong> → salin token. Lalu buka bot kamu dan kirim <code>/start</code>,
           kemudian klik <strong>Deteksi otomatis</strong>.
@@ -366,10 +367,8 @@ export function SetupForm({
         )}
       </section>
 
-      <section className="card step">
-        <h2>
-          <span className="step-n">3</span> Alarm kalau bot mati <span className="tag">opsional</span>
-        </h2>
+      <section className="sub">
+        <h3>Alarm kalau bot mati (Healthchecks.io)</h3>
         <p className="help">
           Daftar gratis di{" "}
           <a href="https://healthchecks.io" target="_blank" rel="noopener noreferrer">
@@ -389,9 +388,11 @@ export function SetupForm({
         />
       </section>
 
+      </details>
+
       <section className="card step">
         <h2>
-          <span className="step-n">4</span> Simpan &amp; jalankan
+          <span className="step-n">2</span> Simpan &amp; jalankan
         </h2>
         {remaining.size > 0 && (
           <p className="note note-warn">

@@ -11,7 +11,7 @@ import ccxt.async_support as ccxt
 from ..config import BotConfig
 from ..db import Store
 from ..exchange.base import ExchangeClient
-from ..models import BotStatus, Market, Order, Position, Signal
+from ..models import BotStatus, Market, Order, Position, Signal, Ticker
 from ..notify.base import Notifier
 from ..risk.engine import Decision
 
@@ -83,7 +83,8 @@ class Executor:
         avg = o.average or (cost / o.filled)
         pos_id = self.store.open_position(symbol=sig.symbol, amount=amount, entry_price=avg, cost=cost,
                                           stop_price=sig.stop, take_profit=sig.take_profit,
-                                          fees=self._quote_fee(o, quote))
+                                          fees=self._quote_fee(o, quote), sleeve=sig.sleeve, trailing=sig.trailing,
+                                          trail_mult=sig.trail_mult, atr=sig.atr, timeframe=sig.timeframe)
         self.store.update_order(cid, position_id=pos_id)
         self.store.audit("engine", "entry", f"{sig.symbol} pos={pos_id} amount={amount} avg={avg:.8g} cost={cost:.2f}")
 
@@ -194,9 +195,9 @@ class Executor:
         return pnl
 
     # ---- keep each open position protected ---------------------------------------------
-    async def sync_position(self, pos: Position) -> bool:
+    async def sync_position(self, pos: Position, ticker: Ticker | None = None) -> bool:
         """Returns True if the position is still open afterwards."""
-        ticker = await self.ex.fetch_ticker(pos.symbol)
+        ticker = ticker or await self.ex.fetch_ticker(pos.symbol)
         limit_price = pos.stop_price * (1 - self.cfg.risk.stop_limit_offset_pct / 100)
         if pos.stop_order_id:
             try:
@@ -241,3 +242,44 @@ class Executor:
             await self.close_position(pos, "stop_placement_failed")
             return False
         return True
+
+    # ---- trailing stop -------------------------------------------------------------------
+    async def update_trailing(self, pos: Position, ticker: Ticker, min_step_pct: float = 0.5) -> None:
+        """Raise the stop behind the highest price since entry. Never lowers it.
+
+        Exchange stops lock the coins, so moving one is cancel -> place. If placing the new stop fails we put
+        the old one back; if that fails too the position is sold (never left unprotected).
+        """
+        highest = max(pos.highest or pos.entry_price, ticker.bid)
+        if highest > (pos.highest or 0):
+            self.store.set_position_highest(pos.id, highest)
+            pos.highest = highest
+        new_stop = highest - pos.trail_mult * pos.atr
+        if pos.atr <= 0 or new_stop <= pos.stop_price * (1 + min_step_pct / 100) or new_stop >= ticker.bid:
+            return
+        if not self.exchange_stop_supported(pos.symbol) or not pos.stop_order_id:
+            self.store.set_position_stop(pos.id, pos.stop_order_id, new_stop)
+            pos.stop_price = new_stop
+            return
+        old_stop = pos.stop_price
+        try:
+            await self.ex.cancel_order(pos.stop_order_id, pos.symbol)
+            prev = await self.ex.fetch_order(pos.stop_order_id, pos.symbol)
+        except Exception:  # noqa: BLE001
+            log.exception("trailing: cancel failed for %s", pos.symbol)
+            return
+        if prev.status == "closed":
+            await self.finalize_stop_fill(pos, prev, reason="trailing_stop")
+            return
+        base = pos.symbol.split("/")[0]
+        bal = await self.ex.fetch_balance()
+        amount = self.ex.amount_to_precision(pos.symbol, min(pos.amount, bal.free_of(base)))
+        if await self.place_stop(pos.id, pos.symbol, amount, new_stop) is not None:
+            pos.stop_price = new_stop
+            self.store.audit("engine", "trail", f"{pos.symbol} stop {old_stop:.8g} -> {new_stop:.8g}")
+            return
+        log.warning("trailing: new stop failed for %s, restoring old stop", pos.symbol)
+        if await self.place_stop(pos.id, pos.symbol, amount, old_stop) is None:
+            await self.notify.send(f"🛑 {pos.symbol}: stop tidak bisa dipasang ulang. Menjual posisi.")
+            pos.stop_order_id = None
+            await self.close_position(pos, "stop_placement_failed")

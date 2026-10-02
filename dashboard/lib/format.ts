@@ -15,7 +15,8 @@ export function fmtNum(n: number | null | undefined, maxFrac = 2, minFrac = 0): 
 /** Jumlah uang dengan label quote, mis. "1.234,56 USDT"; untuk IDR: "Rp 25.000" */
 export function fmtMoney(n: number | null | undefined, quote: string, signed = false): string {
   if (n == null || !Number.isFinite(n)) return "–";
-  const big = Math.abs(n) >= 1000;
+  // Rupiah has no meaningful cents: always whole numbers. Other quotes keep 2 decimals below 1000.
+  const big = Math.abs(n) >= 1000 || quote === "IDR";
   const s = fmtNum(Math.abs(n), big ? 0 : 2, big ? 0 : 2);
   const sign = n < 0 ? "-" : signed && n > 0 ? "+" : "";
   return quote === "IDR" ? `${sign}Rp ${s}` : `${sign}${s} ${quote}`;
@@ -62,4 +63,45 @@ export function pnlClass(n: number | null | undefined): string {
 export function fmtDetail(v: unknown): string {
   if (v == null) return "";
   return typeof v === "string" ? v : JSON.stringify(v);
+}
+
+/** epoch DETIK -> "3 mnt lalu" / "2 j lalu" / "5 hr lalu" (atau "dalam ..." untuk masa depan) */
+export function fmtRelative(ts: number | null | undefined, nowMs = Date.now()): string {
+  if (ts == null || !Number.isFinite(ts)) return "–";
+  const diff = nowMs / 1000 - ts;
+  const a = Math.abs(diff);
+  let t: string;
+  if (a < 60) t = `${Math.round(a)} dtk`;
+  else if (a < 3600) t = `${Math.round(a / 60)} mnt`;
+  else if (a < 86400) t = `${Math.round(a / 3600)} j`;
+  else t = `${Math.round(a / 86400)} hr`;
+  return diff >= 0 ? `${t} lalu` : `dalam ${t}`;
+}
+
+export function fmtPct(n: number | null | undefined, digits = 2, signed = false): string {
+  if (n == null || !Number.isFinite(n)) return "–";
+  return `${signed && n > 0 ? "+" : ""}${fmtNum(n, digits, digits)}%`;
+}
+
+export function fmtPF(n: number | null | undefined): string {
+  return n == null || !Number.isFinite(n) ? "∞" : fmtNum(n, 2, 2);
+}
+
+export const SLEEVE_TITLE: Record<string, string> = { majors: "Koin terkenal", alts: "Koin kecil / alt" };
+
+export const SLEEVE_STATUS: Record<string, { tone: "ok" | "warn" | "bad" | "neutral"; label: string; short: string }> = {
+  ok: { tone: "ok", label: "Edge tervalidasi ✓ — boleh trading", short: "tervalidasi" },
+  no_edge: { tone: "warn", label: "Belum ada keunggulan — bot diam (aman)", short: "belum ada edge" },
+  degraded: { tone: "bad", label: "Performa live menurun — entry dijeda, latih ulang", short: "menurun" },
+  untrained: { tone: "neutral", label: "Belum dilatih", short: "belum dilatih" },
+};
+export function sleeveStatus(s: string | null | undefined) {
+  return SLEEVE_STATUS[s ?? "untrained"] ?? SLEEVE_STATUS.untrained;
+}
+
+export function regimeInfo(r: { alts_blocked: boolean; all_blocked: boolean } | null | undefined) {
+  if (!r) return { tone: "neutral" as const, label: "Regime: menunggu data", short: "menunggu" };
+  if (r.all_blocked) return { tone: "bad" as const, label: "Semua entry ditahan: BTC bergerak ekstrem", short: "semua ditahan" };
+  if (r.alts_blocked) return { tone: "warn" as const, label: "Alt diblok: BTC melemah", short: "alt diblok" };
+  return { tone: "ok" as const, label: "Pasar normal", short: "normal" };
 }

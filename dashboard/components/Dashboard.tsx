@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { AuditEntry, EquityPoint, Position, RiskEvent, Signal, Status } from "@/lib/types";
-import { fmtAge, fmtAmount, fmtDetail, fmtMoney, fmtPrice, fmtTime, pnlClass } from "@/lib/format";
+import { fmtAge, fmtAmount, fmtDetail, fmtMoney, fmtPrice, fmtTime, pnlClass, regimeInfo, sleeveStatus } from "@/lib/format";
+import type { View } from "@/components/Nav";
 import { DataTable, type Column } from "@/components/DataTable";
 import { EquityChart } from "@/components/EquityChart";
 import { PanicModal } from "@/components/PanicModal";
@@ -18,12 +19,10 @@ function errMessage(e: unknown): string {
 }
 
 export function Dashboard({
-  onOpenSettings,
-  onOpenPreflight,
+  onNavigate,
   onNotRunning,
 }: {
-  onOpenSettings: () => void;
-  onOpenPreflight: () => void;
+  onNavigate: (v: View) => void;
   onNotRunning: () => void;
 }) {
   const [status, setStatus] = useState<Status | null>(null);
@@ -136,7 +135,16 @@ export function Dashboard({
   const cycleWarn = status != null && (cycleAge == null || cycleAge > STALE_CYCLE_SEC);
 
   const posOpenCols: Column<Position>[] = [
-    { header: "Symbol", render: (p) => <strong>{p.symbol}</strong> },
+    {
+      header: "Symbol",
+      render: (p) => (
+        <>
+          <strong>{p.symbol}</strong>
+          {p.sleeve && <span className="pill pill-sm">{p.sleeve === "majors" ? "terkenal" : "alt"}</span>}
+          {p.trailing ? <span className="pill pill-ok pill-sm">trailing</span> : null}
+        </>
+      ),
+    },
     { header: "Jumlah", className: "num", render: (p) => fmtAmount(p.amount) },
     { header: "Entry", className: "num", render: (p) => fmtPrice(p.entry_price) },
     { header: "Harga kini", className: "num", render: (p) => fmtPrice(p.last_price) },
@@ -146,6 +154,9 @@ export function Dashboard({
       render: (p) => <span className={pnlClass(p.unrealized_pnl)}>{fmtMoney(p.unrealized_pnl, quote, true)}</span>,
     },
     { header: "Stop", className: "num", render: (p) => fmtPrice(p.stop_price) },
+    ...(open?.some((p) => p.highest != null)
+      ? [{ header: "Tertinggi", className: "num", render: (p: Position) => fmtPrice(p.highest) }]
+      : []),
     { header: "TP", className: "num", render: (p) => fmtPrice(p.take_profit) },
     { header: "Dibuka", className: "nowrap", render: (p) => fmtTime(p.opened_at) },
   ];
@@ -206,21 +217,23 @@ export function Dashboard({
     <>
       <header className="top">
         <div className="top-row">
-          <h1>Moneymaker</h1>
+          <h1>Dashboard</h1>
           {status ? (
             <>
-              <span className={`badge ${status.status === "RUNNING" ? "badge-ok" : "badge-warn"}`}>{status.status}</span>
+              <span className={`status-pill ${status.status === "RUNNING" ? "run" : "paused"}`}>
+                <span className="pulse" aria-hidden="true" />
+                {status.status}
+              </span>
               <span className={`badge ${isLive ? "badge-bad" : "badge-neutral"}`}>
                 {isLive ? "LIVE – uang asli" : "paper"}
               </span>
             </>
           ) : (
-            <span className="badge badge-neutral">{banner ? "tidak terhubung" : "memuat…"}</span>
+            <span className="status-pill off">
+              <span className="pulse" aria-hidden="true" />
+              {banner ? "tidak terhubung" : "memuat…"}
+            </span>
           )}
-          <div className="top-actions">
-            <button onClick={onOpenPreflight}>Cek kesiapan</button>
-            <button onClick={onOpenSettings}>Pengaturan</button>
-          </div>
         </div>
         {status && (
           <div className="meta">
@@ -232,6 +245,28 @@ export function Dashboard({
             <span className="muted">
               {status.timeframe} · {status.universe.length} pair
             </span>
+          </div>
+        )}
+        {status && (
+          <div className="chip-row" aria-label="Status model dan pasar">
+            {(["majors", "alts"] as const).map((k) => {
+              const st = sleeveStatus(status.model?.[k]);
+              return (
+                <button key={k} type="button" className={`status-chip tone-${st.tone}`} onClick={() => onNavigate("model")}>
+                  <span className="dot" aria-hidden="true" />
+                  {k === "majors" ? "Terkenal" : "Alt"}: {st.short}
+                </button>
+              );
+            })}
+            {(() => {
+              const rg = regimeInfo(status.regime);
+              return (
+                <button type="button" className={`status-chip tone-${rg.tone}`} onClick={() => onNavigate("radar")}>
+                  <span className="dot" aria-hidden="true" />
+                  Pasar: {rg.short}
+                </button>
+              );
+            })()}
           </div>
         )}
         {status?.last_error && (
